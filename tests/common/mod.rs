@@ -8,7 +8,6 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use axum_server::Handle;
 use axum_secure_starter::{
     config::{
         AppConfig, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig, SecurityConfig,
@@ -18,14 +17,15 @@ use axum_secure_starter::{
     service::AuthService,
     state::AppState,
 };
+use axum_server::Handle;
 use serde_json::Value;
 use tempfile::TempDir;
 
 /// The signing key the harness configures. Attack tests use it to forge
 /// tokens that are correctly signed but otherwise malformed.
 pub const TEST_JWT_SECRET: &str = "test-secret-that-is-long-enough-to-pass-validation";
-pub const TEST_JWT_ISSUER: &str = "rust-web-server-tests";
-pub const TEST_JWT_AUDIENCE: &str = "rust-web-server-tests-api";
+pub const TEST_JWT_ISSUER: &str = "axum-secure-starter-tests";
+pub const TEST_JWT_AUDIENCE: &str = "axum-secure-starter-tests-api";
 
 pub struct TestApp {
     pub base_url: String,

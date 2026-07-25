@@ -6,8 +6,8 @@ mod common;
 
 use std::time::Duration;
 
-use common::{TestOptions, login, register_and_login, spawn, spawn_with};
 use axum_secure_starter::service::AdminBootstrap;
+use common::{TestOptions, login, register_and_login, spawn, spawn_with};
 use serde_json::Value;
 use std::{
     io::{Read, Write},

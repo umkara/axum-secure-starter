@@ -4,10 +4,10 @@
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
-use axum_server::Handle;
 use axum_secure_starter::{
     config::AppConfig, db, server, service::AdminBootstrap, state::AppState, telemetry,
 };
+use axum_server::Handle;
 use tokio::signal;
 
 /// How often expired refresh tokens are swept out of the database.
