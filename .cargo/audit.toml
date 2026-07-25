@@ -1,0 +1,18 @@
+# cargo-audit configuration.
+#
+# `cargo audit` reads Cargo.lock, which lists every crate the resolver
+# considered — including optional dependencies that no enabled feature turns on.
+# An advisory against such a crate is noise: the code is never compiled and
+# cannot run. Each entry below must record why, and CI must prove the claim
+# rather than trusting this file.
+
+[advisories]
+ignore = [
+    # rsa 0.9.x, Marvin timing side-channel. Reaches the lockfile through
+    # `sqlx-mysql`, a driver this project does not enable — sqlx is pulled in
+    # with default-features off and only the `sqlite` driver switched on.
+    # Verified absent from the build graph; the `no-unused-drivers` CI job
+    # fails the build if it ever appears, so this ignore cannot quietly start
+    # covering real exposure.
+    "RUSTSEC-2023-0071",
+]

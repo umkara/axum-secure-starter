@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Advisories land against dependencies that have not changed, so the audit
+    # has to run on a clock rather than only on commits.
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: Format, lint, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+      - name: Test
+        run: cargo test --all-features
+
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  no-unused-drivers:
+    name: Unused database drivers stay out of the build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `.cargo/audit.toml` waives an advisory on the strength of these drivers
+      # being absent from the compiled graph. If that ever stops being true the
+      # waiver would start hiding a live vulnerability, so prove it here instead
+      # of trusting the comment.
+      - name: Assert no MySQL or Postgres driver is compiled
+        run: |
+          if cargo tree -e normal | grep -E 'sqlx-(mysql|postgres)'; then
+            echo "::error::a sqlx driver that .cargo/audit.toml assumes is unused is now in the build graph; revisit the waiver"
+            exit 1
+          fi
+          echo "confirmed: only the sqlite driver is compiled"

@@ -1,0 +1,64 @@
+[package]
+name = "axum-secure-starter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Umit Karasu <umkarasu@gmail.com>"]
+description = "A security-hardened JSON API server in Rust: Argon2id credentials, rotating refresh tokens, per-IP and per-account rate limiting, and a bounded request/connection surface."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/umkara/axum-secure-starter"
+homepage = "https://github.com/umkara/axum-secure-starter"
+keywords = ["axum", "api", "authentication", "jwt", "security"]
+categories = ["web-programming::http-server", "authentication"]
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = "0.5.3"
+async-trait = "0.1.91"
+axum = "0.8"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+base64 = "0.23.0"
+chrono = { version = "0.4.45", features = ["serde"] }
+dotenvy = "0.15.7"
+hex = "0.4.3"
+hyper = { version = "1.11.0", default-features = false }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
+rand = { version = "0.10.2", features = ["std", "std_rng"] }
+rustls = { version = "0.23.42", default-features = false, features = ["aws-lc-rs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite", "macros", "migrate", "uuid", "chrono"] }
+subtle = "2.6.1"
+thiserror = "2.0.19"
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5.3", features = ["util", "limit", "timeout", "load-shed", "buffer"] }
+tower-http = { version = "0.7.0", features = ["trace", "compression-gzip", "cors", "limit", "timeout", "request-id", "sensitive-headers", "catch-panic", "normalize-path", "set-header", "fs"] }
+tower_governor = "0.8.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+uuid = { version = "1.24.0", features = ["v4", "serde"] }
+validator = { version = "0.20.0", features = ["derive"] }
+
+[dev-dependencies]
+base64 = "0.23.0"
+chrono = "0.4.45"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+jsonwebtoken = "11.0.0"
+# Tests talk plain HTTP to a loopback listener, so no TLS backend is needed.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tempfile = "3.27.0"
+uuid = "1.24.0"
+
+[profile.release]
+# Cross-crate inlining and a single codegen unit; worth the longer build for a
+# long-running server.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+# `panic = "abort"` is deliberately NOT set: the catch-panic middleware needs
+# unwinding to turn a panicking handler into a 500 instead of killing the
+# process.
+panic = "unwind"

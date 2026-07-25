@@ -1,0 +1,124 @@
+//! Wiring. Concrete implementations are chosen once, here, and everything
+//! downstream depends only on the traits — the closest Rust analogue of a
+//! container assembling beans at start-up.
+//!
+//! The fields are private on purpose. When the connection pool was public, a
+//! handler reached past the repositories and ran SQL directly; the compiler had
+//! no opinion, because nothing forbade it. Accessors expose the collaborators a
+//! layer is entitled to and nothing else, so the layering rule is enforced
+//! rather than merely documented.
+
+use std::sync::Arc;
+
+use sqlx::SqlitePool;
+
+use crate::{
+    config::AppConfig,
+    repository::{
+        ExpiredTokenSweeper, HealthRepository, NoteRepository, SqliteHealthRepository,
+        SqliteNoteRepository, SqliteTokenRepository, SqliteUserRepository, TokenRepository,
+        UserRepository,
+    },
+    security::{CredentialHasher, TokenIssuer, jwt::JwtCodec, password::Argon2Hasher},
+    service::{AccountService, AuthService, NoteService, SessionService, TokenJanitor},
+};
+
+/// Shared, immutable application state. Cloning is refcount-only.
+#[derive(Clone)]
+pub struct AppState {
+    config: Arc<AppConfig>,
+    token_issuer: Arc<dyn TokenIssuer>,
+    auth: Arc<AuthService>,
+    notes: Arc<NoteService>,
+    janitor: Arc<TokenJanitor>,
+    health: Arc<dyn HealthRepository>,
+}
+
+impl AppState {
+    pub fn new(config: Arc<AppConfig>, pool: SqlitePool) -> Self {
+        let users: Arc<dyn UserRepository> = Arc::new(SqliteUserRepository::new(pool.clone()));
+        let note_repo: Arc<dyn NoteRepository> = Arc::new(SqliteNoteRepository::new(pool.clone()));
+        let health: Arc<dyn HealthRepository> = Arc::new(SqliteHealthRepository::new(pool.clone()));
+
+        // One SQLite type satisfies both token interfaces; the services still
+        // see only the slice each of them needs.
+        let token_store = Arc::new(SqliteTokenRepository::new(pool));
+        let tokens: Arc<dyn TokenRepository> = token_store.clone();
+        let sweeper: Arc<dyn ExpiredTokenSweeper> = token_store;
+
+        let token_issuer: Arc<dyn TokenIssuer> = Arc::new(JwtCodec::new(&config.security));
+        let hasher: Arc<dyn CredentialHasher> =
+            Arc::new(Argon2Hasher::new(config.security.max_concurrent_hashes));
+
+        let accounts = Arc::new(AccountService::new(users, hasher, &config.security));
+        let sessions = Arc::new(SessionService::new(
+            tokens,
+            token_issuer.clone(),
+            &config.security,
+        ));
+
+        let auth = Arc::new(AuthService::new(accounts, sessions));
+        let notes = Arc::new(NoteService::new(note_repo));
+        let janitor = Arc::new(TokenJanitor::new(sweeper));
+
+        Self {
+            config,
+            token_issuer,
+            auth,
+            notes,
+            janitor,
+            health,
+        }
+    }
+
+    /// Assembles state from parts. Tests use this to substitute fakes for the
+    /// slow or stateful collaborators.
+    pub fn from_parts(
+        config: Arc<AppConfig>,
+        token_issuer: Arc<dyn TokenIssuer>,
+        auth: Arc<AuthService>,
+        notes: Arc<NoteService>,
+        janitor: Arc<TokenJanitor>,
+        health: Arc<dyn HealthRepository>,
+    ) -> Self {
+        Self {
+            config,
+            token_issuer,
+            auth,
+            notes,
+            janitor,
+            health,
+        }
+    }
+
+    pub fn config(&self) -> &AppConfig {
+        &self.config
+    }
+
+    pub fn config_handle(&self) -> Arc<AppConfig> {
+        self.config.clone()
+    }
+
+    /// Used by the authentication extractor to verify bearer tokens.
+    pub fn tokens(&self) -> &dyn TokenIssuer {
+        self.token_issuer.as_ref()
+    }
+
+    pub fn auth(&self) -> &AuthService {
+        &self.auth
+    }
+
+    pub fn notes(&self) -> &NoteService {
+        &self.notes
+    }
+
+    /// The scheduled token sweep. Separate from `auth()` so a background job
+    /// cannot reach session revocation.
+    pub fn janitor(&self) -> &TokenJanitor {
+        &self.janitor
+    }
+
+    pub fn health(&self) -> &dyn HealthRepository {
+        self.health.as_ref()
+    }
+}

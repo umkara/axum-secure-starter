@@ -1,0 +1,9 @@
+/target
+/data
+/certs
+.env
+*.db
+*.db-shm
+*.db-wal
+.claude/
+.claude-flow/
