@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use chrono::Utc;
-use sqlx::SqlitePool;
+use chrono::{DateTime, Utc};
+use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::{domain::Note, repository::error::RepositoryResult};
@@ -45,6 +45,36 @@ pub trait NoteRepository: Send + Sync + 'static {
 
 const NOTE_COLUMNS: &str = "id, owner_id, title, body, created_at, updated_at";
 
+/// The SQLite shape of a note, kept separate from [`Note`] so the domain type
+/// carries no `sqlx` derives. The two are field-for-field today; the point is
+/// that they are free to diverge — a column rename, a packed representation or
+/// a second backend's row type changes only this file.
+#[derive(FromRow)]
+struct NoteRow {
+    id: Uuid,
+    owner_id: Uuid,
+    title: String,
+    body: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+// Infallible on purpose: every conversion here is a move. A row that needed
+// validation would be a sign the column types had drifted from the domain, and
+// should fail loudly in `TryFrom` instead.
+impl From<NoteRow> for Note {
+    fn from(row: NoteRow) -> Self {
+        Note {
+            id: row.id,
+            owner_id: row.owner_id,
+            title: row.title,
+            body: row.body,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
 pub struct SqliteNoteRepository {
     pool: SqlitePool,
 }
@@ -59,7 +89,7 @@ impl SqliteNoteRepository {
 impl NoteRepository for SqliteNoteRepository {
     async fn insert(&self, note: NewNote) -> RepositoryResult<Note> {
         let now = Utc::now();
-        let row = sqlx::query_as::<_, Note>(&format!(
+        let row = sqlx::query_as::<_, NoteRow>(&format!(
             "INSERT INTO notes (id, owner_id, title, body, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?)
              RETURNING {NOTE_COLUMNS}"
@@ -72,18 +102,18 @@ impl NoteRepository for SqliteNoteRepository {
         .bind(now)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row)
+        Ok(row.into())
     }
 
     async fn find_owned(&self, id: Uuid, owner_id: Uuid) -> RepositoryResult<Option<Note>> {
-        let row = sqlx::query_as::<_, Note>(&format!(
+        let row = sqlx::query_as::<_, NoteRow>(&format!(
             "SELECT {NOTE_COLUMNS} FROM notes WHERE id = ? AND owner_id = ?"
         ))
         .bind(id)
         .bind(owner_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row)
+        Ok(row.map(Note::from))
     }
 
     async fn list_owned(
@@ -92,7 +122,7 @@ impl NoteRepository for SqliteNoteRepository {
         limit: i64,
         offset: i64,
     ) -> RepositoryResult<Vec<Note>> {
-        let rows = sqlx::query_as::<_, Note>(&format!(
+        let rows = sqlx::query_as::<_, NoteRow>(&format!(
             "SELECT {NOTE_COLUMNS} FROM notes
              WHERE owner_id = ?
              ORDER BY created_at DESC
@@ -103,7 +133,7 @@ impl NoteRepository for SqliteNoteRepository {
         .bind(offset)
         .fetch_all(&self.pool)
         .await?;
-        Ok(rows)
+        Ok(rows.into_iter().map(Note::from).collect())
     }
 
     async fn count_owned(&self, owner_id: Uuid) -> RepositoryResult<i64> {
@@ -121,7 +151,7 @@ impl NoteRepository for SqliteNoteRepository {
         title: &str,
         body: &str,
     ) -> RepositoryResult<Option<Note>> {
-        let row = sqlx::query_as::<_, Note>(&format!(
+        let row = sqlx::query_as::<_, NoteRow>(&format!(
             "UPDATE notes SET title = ?, body = ?, updated_at = ?
              WHERE id = ? AND owner_id = ?
              RETURNING {NOTE_COLUMNS}"
@@ -133,7 +163,7 @@ impl NoteRepository for SqliteNoteRepository {
         .bind(owner_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row)
+        Ok(row.map(Note::from))
     }
 
     async fn delete_owned(&self, id: Uuid, owner_id: Uuid) -> RepositoryResult<bool> {
