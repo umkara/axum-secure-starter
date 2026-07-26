@@ -897,3 +897,43 @@ async fn static_serving_cannot_escape_its_directory() {
         );
     }
 }
+
+#[tokio::test]
+async fn the_document_revalidates_while_assets_may_be_cached() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "<!doctype html><p>hi</p>").unwrap();
+    std::fs::write(dir.path().join("app.js"), "export const x = 1;").unwrap();
+
+    let app = spawn_with(TestOptions {
+        static_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+
+    // The document must never be held: it is what points at the current asset
+    // filenames, so a cached copy shows a stale app after every deploy.
+    let page = app.client.get(app.url("/")).send().await.unwrap();
+    assert_eq!(
+        page.headers()["cache-control"],
+        "no-cache",
+        "index.html must revalidate"
+    );
+
+    // Assets may be held, which is the whole reason for serving them here.
+    let asset = app.client.get(app.url("/app.js")).send().await.unwrap();
+    assert!(
+        asset.headers()["cache-control"]
+            .to_str()
+            .unwrap()
+            .contains("max-age"),
+        "assets should be cacheable"
+    );
+
+    // The SPA fallback serves the document, so it inherits the document policy.
+    let deep = app.client.get(app.url("/deep/link")).send().await.unwrap();
+    assert_eq!(
+        deep.headers()["cache-control"],
+        "no-cache",
+        "the SPA fallback is the document too"
+    );
+}

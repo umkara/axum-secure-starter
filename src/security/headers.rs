@@ -4,7 +4,7 @@
 //! browser-side attacks. They are set unconditionally rather than per-route so
 //! a new endpoint cannot be shipped without them.
 
-use axum::http::{HeaderName, HeaderValue, header};
+use axum::http::{HeaderName, HeaderValue, Response, header};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 /// A JSON API serves no HTML, scripts, or frames, so the policy can deny
@@ -23,6 +23,10 @@ const PAGE_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self
 /// One year, including subdomains, and preload-eligible. Only meaningful over
 /// HTTPS; browsers ignore it on plaintext connections.
 const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000; includeSubDomains; preload";
+
+/// Chooses a `Cache-Control` value by inspecting the response it will be
+/// attached to. Named so the layer's type stays readable.
+pub type CachePolicy<B> = fn(&Response<B>) -> Option<HeaderValue>;
 
 macro_rules! static_header {
     ($name:expr, $value:expr) => {
@@ -89,10 +93,35 @@ impl SecurityHeaders {
         )
     }
 
-    /// Static assets are public and unchanging between deploys; `no-store`
-    /// would make every page load re-fetch them. Build pipelines that emit
-    /// content-hashed filenames can raise this considerably.
-    pub fn asset_cache() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(header::CACHE_CONTROL, "public, max-age=3600")
+    /// Caching for served files, chosen per response.
+    ///
+    /// HTML gets `no-cache`, meaning "revalidate before reusing" rather than
+    /// "never cache" — the conditional request is cheap and usually answered
+    /// with a 304. Everything else may be held for an hour.
+    ///
+    /// The distinction matters: a blanket lifetime on `index.html` leaves
+    /// browsers showing a stale page for that long after every deploy, while
+    /// the document is the one file that must always be fresh, because it is
+    /// what points at the current asset filenames.
+    pub fn asset_cache<B>() -> SetResponseHeaderLayer<CachePolicy<B>> {
+        fn policy<B>(response: &Response<B>) -> Option<HeaderValue> {
+            let is_document = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with("text/html"));
+
+            Some(if is_document {
+                HeaderValue::from_static("no-cache")
+            } else {
+                HeaderValue::from_static("public, max-age=3600")
+            })
+        }
+
+        // Annotated rather than cast with `as fn(_) -> _`: the inferred cast
+        // pins a single lifetime, and this has to stay valid for any borrow of
+        // the response.
+        let policy: CachePolicy<B> = policy::<B>;
+        SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, policy)
     }
 }

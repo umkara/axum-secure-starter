@@ -97,7 +97,10 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
     by 10&ndash;20&nbsp;% between runs, and by far more if the machine is busy —
     an earlier round taken right after a compile read three times lower. Take the
     orders of magnitude seriously and the exact digits lightly, and measure on
-    your own hardware before planning capacity.
+    your own hardware before planning capacity. The load generator is not the
+    limit here — two parallel <code>ab</code> instances sum to the same total as
+    one — but it does share the same eight cores as the server, so a dedicated
+    machine would go higher.
   </div>
 
   <div class="metrics">
@@ -137,42 +140,6 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
   </table>
   </div>
 
-
-  <h3>Against other runtimes</h3>
-  <p>
-    Same machine, same benchmark, same response body — a small JSON object — with
-    each server given its own port and measured while the others sat idle. Median
-    of three runs at concurrency 50.
-  </p>
-  <div class="scroll-x">
-  <table>
-    <thead><tr><th>Server</th><th>req/s</th><th>p50</th><th>p99</th></tr></thead>
-    <tbody>
-      <tr><td><strong>Rust — axum, this project</strong></td><td><strong>53,136</strong></td><td>1 ms</td><td>2 ms</td></tr>
-      <tr><td>Bun — <code>Bun.serve</code></td><td>25,344</td><td>2 ms</td><td>20 ms</td></tr>
-      <tr><td>Node — Express</td><td>10,732</td><td>4 ms</td><td>19 ms</td></tr>
-      <tr><td>Node — stdlib <code>http</code></td><td>10,430</td><td>3 ms</td><td>233 ms</td></tr>
-      <tr><td>Python — stdlib, threaded</td><td>925</td><td>—</td><td>—</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <div class="note">
-    <strong>Read this comparison carefully — it is not apples to apples, and the
-    tilt is against Rust.</strong> Every other server here is a bare handler
-    returning a constant. The Rust figure carries the entire hardening stack on
-    every request: request id, tracing, eight response headers, CORS, a
-    concurrency limit, request and body deadlines, and path canonicalisation.
-    It is doing strictly more work and still leads.
-  </div>
-  <p>
-    Two honest caveats. Node's standard library varied between 10,400 and 23,000
-    req/s across rounds, so treat its position as approximate; Express was steady
-    near 10,500. Python's threaded <code>http.server</code> could not sustain
-    concurrency 50 at all — it was measured at concurrency 10 without keep-alive,
-    and is included to show the shape of the gap rather than as a fair
-    representation of production Python, which would use an ASGI server such as
-    uvicorn and land far higher.
-  </p>
 
   <h3>Static files are the slowest thing here</h3>
   <p>
@@ -613,6 +580,7 @@ x-request-id: &lt;uuid, echoed back for correlation&gt;</code></pre>
   <ul>
     <li><strong>No inline scripts or styles.</strong> No <code>&lt;script&gt;alert(1)&lt;/script&gt;</code>, no <code>style="…"</code> attributes, no <code>onclick=</code> handlers. Put code in files and attach listeners in JavaScript. Every bundler already does this.</li>
     <li><strong>Same-origin only.</strong> No CDN scripts, fonts, or images. Install the dependency and let your bundler emit it locally.</li>
+    <li><strong>The document revalidates, assets are cached.</strong> <code>index.html</code> is served <code>no-cache</code> so a deploy takes effect immediately; everything else gets an hour. Cache the document instead and users keep running the previous build until it expires.</li>
     <li><strong>Tokens live in memory, refresh tokens in <code>localStorage</code>.</strong> With inline execution blocked and <code>frame-ancestors 'none'</code> set, the usual paths to stealing them are closed.</li>
   </ul>
   <p>

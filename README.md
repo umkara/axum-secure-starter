@@ -543,26 +543,10 @@ flood sheds instead of exhausting memory. Static files are the slowest served
 path because every request reads from disk; put a CDN or proxy in front if you
 serve a large bundle under real traffic.
 
-Against other runtimes on the same machine, same benchmark, same JSON body:
-
-| Server | req/s | p50 | p99 |
-| --- | --- | --- | --- |
-| **Rust — axum, this project** | **53,136** | 1 ms | 2 ms |
-| Bun — `Bun.serve` | 25,344 | 2 ms | 20 ms |
-| Node — Express | 10,732 | 4 ms | 19 ms |
-| Node — stdlib `http` | 10,430 | 3 ms | 233 ms |
-| Python — stdlib, threaded | 925 | — | — |
-
-That comparison is not apples to apples, and the tilt runs *against* Rust: every
-other server is a bare handler returning a constant, while the Rust figure
-carries the whole hardening stack on each request. Node's standard library
-varied between 10,400 and 23,000 req/s across rounds, and Python's threaded
-`http.server` could not sustain concurrency 50 at all — it was measured at
-concurrency 10 and is there to show the shape of the gap, not to represent
-production Python on an ASGI server.
-
 Numbers on a laptop move 10–20 % between runs and far more if the machine is
-busy. Measure on your own hardware before planning capacity.
+busy. The load generator is not the limit — two parallel `ab` instances sum to
+the same total as one — but it shares the same cores as the server, so dedicated
+hardware would go higher. Measure on your own before planning capacity.
 
 ## Security design
 
