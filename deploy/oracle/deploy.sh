@@ -109,11 +109,13 @@ if [ -n "${HAS_ENV:-}" ]; then
   sudo install -o root -g axum -m 0640 env /etc/axum-secure-starter/env
 fi
 
-if [ ! -f /etc/axum-secure-starter/env ]; then
+# These live in a 0750 root:axum directory that the deploying user cannot
+# traverse, so the tests have to run as root or they always report "missing".
+if ! sudo test -f /etc/axum-secure-starter/env; then
   echo "no /etc/axum-secure-starter/env on the host; pass --env FILE" >&2
   exit 1
 fi
-if [ ! -s /etc/axum-secure-starter/certs/fullchain.pem ]; then
+if ! sudo test -s /etc/axum-secure-starter/certs/fullchain.pem; then
   echo "no certificate installed; run issue-cert.sh first (production refuses to start without TLS)" >&2
   exit 1
 fi
