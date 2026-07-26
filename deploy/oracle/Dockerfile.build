@@ -1,0 +1,37 @@
+# Build-only image: produces an aarch64 binary and nothing else.
+#
+# Oracle's free tier is Ampere (aarch64) and an Apple Silicon Mac is also
+# aarch64, so `--platform linux/arm64` runs natively here — no emulation, and
+# no cross-linking toolchain to assemble. The final stage is `scratch` because
+# the only artefact wanted is the executable.
+
+ARG RUST_IMAGE=rust:1-bookworm
+
+FROM --platform=$TARGETPLATFORM ${RUST_IMAGE} AS build
+
+# aws-lc-rs (used by rustls, sqlx and jsonwebtoken here) compiles C and needs
+# both cmake and clang; the base image ships neither.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake clang \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+# Dependencies change far less often than the source, so build them against a
+# stub first and let the layer cache keep them.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+ && echo 'fn main() {}' > src/main.rs \
+ && echo '' > src/lib.rs \
+ && cargo build --release --locked \
+ && rm -rf src
+
+COPY . .
+# The stub's fingerprint would otherwise be reused for the real crate.
+RUN touch src/main.rs src/lib.rs \
+ && cargo build --release --locked
+
+# Debian bookworm carries glibc 2.36; Ubuntu 24.04 carries 2.39. Building
+# against the older one keeps the binary loadable on the newer host.
+FROM scratch AS artifact
+COPY --from=build /src/target/release/axum-secure-starter /axum-secure-starter

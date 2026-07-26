@@ -1,0 +1,61 @@
+[Unit]
+Description=axum-secure-starter
+Documentation=https://github.com/umkara/axum-secure-starter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=axum
+Group=axum
+ExecStart=/opt/axum-secure-starter/bin/axum-secure-starter
+WorkingDirectory=/var/lib/axum-secure-starter
+
+# Secrets live here, not in the unit: `systemctl show` and the journal would
+# otherwise expose the signing key.
+EnvironmentFile=/etc/axum-secure-starter/env
+
+Restart=on-failure
+RestartSec=2s
+# The graceful shutdown drains for APP_SHUTDOWN_GRACE_SECS; allow more than that
+# so systemd never SIGKILLs a drain that is still making progress.
+KillSignal=SIGTERM
+TimeoutStopSec=45s
+
+# Binding :443 without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# APP_MAX_CONNECTIONS defaults to 4096, and each connection is a descriptor;
+# the usual 1024 limit would be hit long before the server's own ceiling.
+LimitNOFILE=65535
+
+# Hardening. The database directory is the only writable path the service needs.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectProc=invisible
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectClock=true
+ReadWritePaths=/var/lib/axum-secure-starter
+# AF_UNIX is not used for listening; it is here because journald's stdout
+# forwarding and glibc's resolver both reach for it.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,72 @@
+#cloud-config
+# Paste this into "Advanced options -> Management -> Initialization script" when
+# creating the Oracle A1 instance, or pass it with
+# `oci compute instance launch --user-data-file`.
+#
+# It prepares the host and nothing more: the binary, assets, certificates and
+# environment arrive later via `deploy.sh`. The service is installed but left
+# disabled, because it refuses to start until TLS material exists.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - certbot
+  - ca-certificates
+  - iptables-persistent
+
+users:
+  # `ubuntu` keeps the key you selected at launch; this is the service account.
+  - name: axum
+    system: true
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+
+write_files:
+  # Oracle's Ubuntu images ship an iptables INPUT chain that REJECTs everything
+  # except SSH. Opening the VCN security list alone is not enough — traffic
+  # reaches the host and is dropped there, which looks exactly like a security
+  # list mistake. Inserting at position 1 puts these before the REJECT
+  # regardless of how the rest of the chain is numbered.
+  - path: /usr/local/sbin/open-web-ports
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      for port in 80 443; do
+        if ! iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
+          iptables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT
+        fi
+        if ! ip6tables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
+          ip6tables -I INPUT 1 -p tcp --dport "$port" -j ACCEPT
+        fi
+      done
+      netfilter-persistent save
+
+  # Renewal runs unattended, so the new certificate has to reach the service
+  # without a human copying files. certbot's own directory is root-only; this
+  # publishes a copy the service account can read.
+  - path: /etc/letsencrypt/renewal-hooks/deploy/50-axum-secure-starter
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -eu
+      dest=/etc/axum-secure-starter/certs
+      install -m 0644 -o root -g axum "$RENEWED_LINEAGE/fullchain.pem" "$dest/fullchain.pem"
+      install -m 0640 -o root -g axum "$RENEWED_LINEAGE/privkey.pem" "$dest/privkey.pem"
+      # The server reads its certificate once, at start-up. On the very first
+      # issuance the unit is not installed yet, and a failing hook would make
+      # certbot report failure for a certificate it successfully obtained.
+      if systemctl is-enabled --quiet axum-secure-starter.service 2>/dev/null; then
+        systemctl restart axum-secure-starter.service
+      fi
+
+runcmd:
+  - [ /usr/local/sbin/open-web-ports ]
+  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/axum-secure-starter/bin ]
+  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/axum-secure-starter/bastion ]
+  - [ install, -d, -o, axum, -g, axum, -m, '0750', /var/lib/axum-secure-starter ]
+  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/axum-secure-starter ]
+  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/axum-secure-starter/certs ]
+  # certbot renews on a timer; renewal binds :80 briefly in standalone mode.
+  - [ systemctl, enable, --now, certbot.timer ]

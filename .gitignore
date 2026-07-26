@@ -7,3 +7,5 @@
 *.db-wal
 .claude/
 .claude-flow/
+/dist
+deploy/oracle/env.production
