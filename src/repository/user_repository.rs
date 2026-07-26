@@ -1,6 +1,7 @@
+use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::SqlitePool;
+use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
@@ -55,8 +56,48 @@ pub trait UserRepository: Send + Sync + 'static {
     async fn set_role(&self, id: Uuid, role: Role) -> RepositoryResult<()>;
 }
 
+// `updated_at` is written on every mutation but never read back: nothing in the
+// domain depends on it, so selecting it would only mean carrying a field around.
 const USER_COLUMNS: &str =
-    "id, email, password_hash, role, failed_attempts, locked_until, created_at, updated_at";
+    "id, email, password_hash, role, failed_attempts, locked_until, created_at";
+
+/// The SQLite shape of an account. `role` is TEXT here and a [`Role`] in the
+/// domain, which is the whole reason this type exists: the encoding belongs to
+/// the store, and the conversion is allowed to fail.
+#[derive(FromRow)]
+struct UserRow {
+    id: Uuid,
+    email: String,
+    password_hash: String,
+    role: String,
+    failed_attempts: i64,
+    locked_until: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+impl TryFrom<UserRow> for User {
+    type Error = RepositoryError;
+
+    fn try_from(row: UserRow) -> Result<Self, Self::Error> {
+        // An unparseable role means the column holds something no version of
+        // this code writes — a hand-edited row, or a migration that got ahead of
+        // the binary. Refusing beats guessing: silently defaulting to `user`
+        // would demote an admin, and to `admin` would escalate everyone.
+        let role = row.role.parse().map_err(|_| {
+            RepositoryError::Backend(anyhow!("unknown role `{}` stored for user", row.role))
+        })?;
+
+        Ok(User {
+            id: row.id,
+            email: row.email,
+            password_hash: row.password_hash,
+            role,
+            failed_attempts: row.failed_attempts,
+            locked_until: row.locked_until,
+            created_at: row.created_at,
+        })
+    }
+}
 
 pub struct SqliteUserRepository {
     pool: SqlitePool,
@@ -74,7 +115,7 @@ impl UserRepository for SqliteUserRepository {
         // The UNIQUE index on `email` is what enforces the contract above; the
         // conversion in `repository::error` turns its violation into
         // `Conflict`.
-        let row = sqlx::query_as::<_, User>(&format!(
+        let row = sqlx::query_as::<_, UserRow>(&format!(
             "INSERT INTO users (id, email, password_hash, role, failed_attempts, created_at, updated_at)
              VALUES (?, ?, ?, ?, 0, ?, ?)
              RETURNING {USER_COLUMNS}"
@@ -89,25 +130,26 @@ impl UserRepository for SqliteUserRepository {
         .await
         .map_err(RepositoryError::from)?;
 
-        Ok(row)
+        row.try_into()
     }
 
     async fn find_by_id(&self, id: Uuid) -> RepositoryResult<Option<User>> {
         let row =
-            sqlx::query_as::<_, User>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?"))
+            sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?"))
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await?;
-        Ok(row)
+        row.map(User::try_from).transpose()
     }
 
     async fn find_by_email(&self, email: &str) -> RepositoryResult<Option<User>> {
-        let row =
-            sqlx::query_as::<_, User>(&format!("SELECT {USER_COLUMNS} FROM users WHERE email = ?"))
-                .bind(email)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row)
+        let row = sqlx::query_as::<_, UserRow>(&format!(
+            "SELECT {USER_COLUMNS} FROM users WHERE email = ?"
+        ))
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(User::try_from).transpose()
     }
 
     async fn record_failed_login(

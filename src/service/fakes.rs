@@ -109,7 +109,6 @@ impl UserRepository for InMemoryUserRepository {
             failed_attempts: 0,
             locked_until: None,
             created_at: now,
-            updated_at: now,
         };
         users.push(stored.clone());
         Ok(stored)

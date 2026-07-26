@@ -2,7 +2,6 @@ use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,27 +42,19 @@ impl FromStr for Role {
 ///
 /// `password_hash` never leaves this struct: there is no `Serialize` impl, and
 /// the `Debug` impl below redacts it so it cannot reach a log line by accident.
-#[derive(Clone, FromRow)]
+///
+/// Carries no database derives, and no field the rules do not use: the stored
+/// shape, including `updated_at` and the textual encoding of `role`, is
+/// `UserRow`'s problem in the repository.
+#[derive(Clone)]
 pub struct User {
     pub id: Uuid,
     pub email: String,
     pub password_hash: String,
-    #[sqlx(try_from = "String")]
     pub role: Role,
     pub failed_attempts: i64,
     pub locked_until: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-    /// Present for schema fidelity; not read by the application today.
-    #[allow(dead_code)]
-    pub updated_at: DateTime<Utc>,
-}
-
-impl TryFrom<String> for Role {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        value.parse().map_err(|_| format!("unknown role `{value}`"))
-    }
 }
 
 impl User {
