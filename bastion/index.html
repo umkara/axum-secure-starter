@@ -88,16 +88,23 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
   <h2>Performance</h2>
   <p>
     Measured, not estimated. Apple M2, 8 cores, release build, SQLite in WAL mode,
-    loopback, <code>ab -k</code> with 20,000 requests at concurrency 50. Rate
-    limits were raised for the run so the numbers reflect the server rather than
-    the limiter.
+    loopback, <code>ab -k</code> with 20,000 requests at concurrency 50, median
+    of three runs. Rate limits were raised for the run so the numbers reflect the
+    server rather than the limiter.
   </p>
+  <div class="note">
+    <strong>Run-to-run variance is real.</strong> On a laptop these figures move
+    by 10&ndash;20&nbsp;% between runs, and by far more if the machine is busy —
+    an earlier round taken right after a compile read three times lower. Take the
+    orders of magnitude seriously and the exact digits lightly, and measure on
+    your own hardware before planning capacity.
+  </div>
 
   <div class="metrics">
-    <div class="metric"><span class="value">17,946</span><span class="label">req/s — health probe</span></div>
-    <div class="metric"><span class="value">12,750</span><span class="label">req/s — authenticated read</span></div>
-    <div class="metric"><span class="value">3 ms</span><span class="label">p50 — authenticated read</span></div>
-    <div class="metric"><span class="value">0</span><span class="label">failed of 40,000</span></div>
+    <div class="metric"><span class="value">53,136</span><span class="label">req/s — health probe</span></div>
+    <div class="metric"><span class="value">30,409</span><span class="label">req/s — authenticated read</span></div>
+    <div class="metric"><span class="value">2 ms</span><span class="label">p50 — authenticated read</span></div>
+    <div class="metric"><span class="value">0</span><span class="label">failed requests</span></div>
   </div>
 
   <div class="scroll-x">
@@ -108,31 +115,68 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
     <tbody>
       <tr>
         <td><code>GET /health/live</code></td>
-        <td>Routing and middleware only</td>
-        <td>17,946</td><td>2 ms</td><td>6 ms</td><td>9 ms</td>
+        <td>Routing and the full middleware stack</td>
+        <td>53,136</td><td>1 ms</td><td>1 ms</td><td>2 ms</td>
       </tr>
       <tr>
         <td><code>GET /api/v1/notes</code></td>
         <td>JWT verify + SQLite read</td>
-        <td>12,750</td><td>3 ms</td><td>8 ms</td><td>12 ms</td>
+        <td>30,409</td><td>2 ms</td><td>2 ms</td><td>3 ms</td>
       </tr>
       <tr>
         <td><code>GET /style.css</code></td>
         <td>5.9 KB static file from disk</td>
-        <td>5,966</td><td>3 ms</td><td>32 ms</td><td>55 ms</td>
+        <td>7,660</td><td>2 ms</td><td>26 ms</td><td>47 ms</td>
       </tr>
       <tr>
         <td><code>POST /api/v1/auth/login</code></td>
         <td>Argon2id, deliberately expensive</td>
-        <td>49</td><td>311 ms</td><td>565 ms</td><td>642 ms</td>
+        <td>73&ndash;187</td><td>193 ms</td><td>—</td><td>311 ms</td>
       </tr>
     </tbody>
   </table>
   </div>
 
+
+  <h3>Against other runtimes</h3>
+  <p>
+    Same machine, same benchmark, same response body — a small JSON object — with
+    each server given its own port and measured while the others sat idle. Median
+    of three runs at concurrency 50.
+  </p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Server</th><th>req/s</th><th>p50</th><th>p99</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Rust — axum, this project</strong></td><td><strong>53,136</strong></td><td>1 ms</td><td>2 ms</td></tr>
+      <tr><td>Bun — <code>Bun.serve</code></td><td>25,344</td><td>2 ms</td><td>20 ms</td></tr>
+      <tr><td>Node — Express</td><td>10,732</td><td>4 ms</td><td>19 ms</td></tr>
+      <tr><td>Node — stdlib <code>http</code></td><td>10,430</td><td>3 ms</td><td>233 ms</td></tr>
+      <tr><td>Python — stdlib, threaded</td><td>925</td><td>—</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    <strong>Read this comparison carefully — it is not apples to apples, and the
+    tilt is against Rust.</strong> Every other server here is a bare handler
+    returning a constant. The Rust figure carries the entire hardening stack on
+    every request: request id, tracing, eight response headers, CORS, a
+    concurrency limit, request and body deadlines, and path canonicalisation.
+    It is doing strictly more work and still leads.
+  </div>
+  <p>
+    Two honest caveats. Node's standard library varied between 10,400 and 23,000
+    req/s across rounds, so treat its position as approximate; Express was steady
+    near 10,500. Python's threaded <code>http.server</code> could not sustain
+    concurrency 50 at all — it was measured at concurrency 10 without keep-alive,
+    and is included to show the shape of the gap rather than as a fair
+    representation of production Python, which would use an ASGI server such as
+    uvicorn and land far higher.
+  </p>
+
   <h3>Static files are the slowest thing here</h3>
   <p>
-    A 5.9 KB stylesheet serves at a third the rate of a JSON response, because
+    A 5.9 KB stylesheet serves at roughly a quarter the rate of a JSON response, because
     every request reads it from disk — there is no in-memory asset cache. That is
     fine for a docs site or an internal tool. If you are serving a large bundle
     under real traffic, put a CDN or a reverse proxy in front and let the Rust
@@ -143,9 +187,11 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
   <p>
     That last row is not a defect. Argon2id reserves 19 MiB and burns CPU by
     design — that is what makes stolen password hashes expensive to crack. A
-    single login costs about <strong>27 ms</strong> sequentially. Under
+    single login costs about <strong>24 ms</strong> sequentially. Under
     concurrency the server admits only as many hashes at once as it has cores,
-    so a login flood queues and sheds instead of exhausting memory.
+    so a login flood queues and sheds instead of exhausting memory. It is also
+    the noisiest measurement here — saturating every core makes throughput swing
+    with thermal state, hence the range rather than a single figure.
   </p>
   <div class="note">
     <strong>The number that matters:</strong> without that admission limit, 200

@@ -527,21 +527,42 @@ Tailwind, and Sass.
 ## Performance
 
 Measured on an Apple M2 (8 cores), release build, loopback, `ab -k -c 50
--n 20000`, with rate limits raised so the figures reflect the server rather than
-the limiter:
+-n 20000`, median of three runs, with rate limits raised so the figures reflect
+the server rather than the limiter:
 
 | Endpoint | Work | req/s | p50 | p99 |
 | --- | --- | --- | --- | --- |
-| `GET /health/live` | routing + middleware | 17,946 | 2 ms | 9 ms |
-| `GET /api/v1/notes` | JWT verify + SQLite read | 12,750 | 3 ms | 12 ms |
-| `GET /style.css` | 5.9 KB file from disk | 5,966 | 3 ms | 55 ms |
-| `POST /api/v1/auth/login` | Argon2id | 49 | 311 ms | 642 ms |
+| `GET /health/live` | routing + full middleware stack | 53,136 | 1 ms | 2 ms |
+| `GET /api/v1/notes` | JWT verify + SQLite read | 30,409 | 2 ms | 3 ms |
+| `GET /style.css` | 5.9 KB file from disk | 7,660 | 2 ms | 47 ms |
+| `POST /api/v1/auth/login` | Argon2id | 73–187 | 193 ms | 311 ms |
 
-Zero failures across 40,000 requests. The login figure is the hashing cost
-working as intended — a single login is ~27 ms sequentially, and concurrent
-hashing is capped so a flood sheds instead of exhausting memory. Static files
-are the slowest path because every request reads from disk; put a CDN or proxy
-in front if you serve a large bundle under real traffic.
+Zero failed requests. The login figure is the hashing cost working as intended —
+a single login is ~24 ms sequentially, and concurrent hashing is capped so a
+flood sheds instead of exhausting memory. Static files are the slowest served
+path because every request reads from disk; put a CDN or proxy in front if you
+serve a large bundle under real traffic.
+
+Against other runtimes on the same machine, same benchmark, same JSON body:
+
+| Server | req/s | p50 | p99 |
+| --- | --- | --- | --- |
+| **Rust — axum, this project** | **53,136** | 1 ms | 2 ms |
+| Bun — `Bun.serve` | 25,344 | 2 ms | 20 ms |
+| Node — Express | 10,732 | 4 ms | 19 ms |
+| Node — stdlib `http` | 10,430 | 3 ms | 233 ms |
+| Python — stdlib, threaded | 925 | — | — |
+
+That comparison is not apples to apples, and the tilt runs *against* Rust: every
+other server is a bare handler returning a constant, while the Rust figure
+carries the whole hardening stack on each request. Node's standard library
+varied between 10,400 and 23,000 req/s across rounds, and Python's threaded
+`http.server` could not sustain concurrency 50 at all — it was measured at
+concurrency 10 and is there to show the shape of the gap, not to represent
+production Python on an ASGI server.
+
+Numbers on a laptop move 10–20 % between runs and far more if the machine is
+busy. Measure on your own hardware before planning capacity.
 
 ## Security design
 
