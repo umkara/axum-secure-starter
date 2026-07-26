@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bastion — docs for axum-secure-starter</title>
+<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, and CSS frameworks.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🛡️</text></svg>">
+</head>
+<body>
+<div class="layout">
+
+<aside class="sidebar">
+  <p class="brand">Bastion</p>
+  <p class="brand-sub">docs for axum-secure-starter</p>
+  <nav id="nav">
+    <div class="nav-group">
+      <p class="nav-title">Start</p>
+      <a href="#overview">Overview</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#performance">Performance</a>
+    </div>
+    <div class="nav-group">
+      <p class="nav-title">Frontend</p>
+      <a href="#serving">Serving a frontend</a>
+      <a href="#client">The API client</a>
+      <a href="#frameworks">JS &amp; TS frameworks</a>
+      <a href="#css">CSS frameworks</a>
+    </div>
+    <div class="nav-group">
+      <p class="nav-title">Reference</p>
+      <a href="#endpoints">Endpoints</a>
+      <a href="#errors">Errors</a>
+      <a href="#csp">CSP &amp; headers</a>
+    </div>
+  </nav>
+</aside>
+
+<main>
+
+<section id="overview">
+  <h1>Bastion</h1>
+  <p class="lede">
+    Documentation for <strong>axum-secure-starter</strong> — a JSON API server in
+    Rust that is hardened by default, and how to put any frontend in front of it.
+  </p>
+  <p>
+    The server handles accounts, sessions, and a small CRUD resource. It hashes
+    passwords with Argon2id, rotates single-use refresh tokens, rate-limits per IP
+    and per account, and bounds every request and connection. None of that is
+    optional or bolted on — it is wired in and covered by 68 tests, 31 of which
+    attack the running server.
+  </p>
+  <p>
+    This site covers running it, what it costs at load, and wiring a frontend to
+    it in whatever you already use: vanilla JavaScript, TypeScript, React, Vue,
+    Svelte, Tailwind, or plain CSS.
+  </p>
+</section>
+
+<section id="quickstart">
+  <h2>Quickstart</h2>
+  <p>Rust 1.85 or newer. No database server — SQLite file, created on first run.</p>
+<pre><code>git clone https://github.com/umkara/axum-secure-starter.git
+cd axum-secure-starter
+cp .env.example .env
+sed -i '' "s|^APP_JWT_SECRET=.*|APP_JWT_SECRET=$(openssl rand -base64 48)|" .env
+mkdir -p data &amp;&amp; cargo run</code></pre>
+  <p>
+    The server listens on <code>127.0.0.1:8443</code>. It refuses to start without
+    a signing key of at least 32 bytes, and refuses to start in
+    <code>production</code> without TLS.
+  </p>
+<pre><code>curl http://127.0.0.1:8443/health/ready
+# {"status":"ready","version":"0.1.0"}</code></pre>
+  <p>Create an account and log in — passwords are 12 characters minimum:</p>
+<pre><code>curl -X POST http://127.0.0.1:8443/api/v1/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"me@example.com","password":"correct-horse-battery-staple"}'
+
+curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"me@example.com","password":"correct-horse-battery-staple"}'</code></pre>
+</section>
+
+<section id="performance">
+  <h2>Performance</h2>
+  <p>
+    Measured, not estimated. Apple M2, 8 cores, release build, SQLite in WAL mode,
+    loopback, <code>ab -k</code> with 20,000 requests at concurrency 50. Rate
+    limits were raised for the run so the numbers reflect the server rather than
+    the limiter.
+  </p>
+
+  <div class="metrics">
+    <div class="metric"><span class="value">17,946</span><span class="label">req/s — health probe</span></div>
+    <div class="metric"><span class="value">12,750</span><span class="label">req/s — authenticated read</span></div>
+    <div class="metric"><span class="value">3 ms</span><span class="label">p50 — authenticated read</span></div>
+    <div class="metric"><span class="value">0</span><span class="label">failed of 40,000</span></div>
+  </div>
+
+  <div class="scroll-x">
+  <table>
+    <thead>
+      <tr><th>Endpoint</th><th>Work done</th><th>req/s</th><th>p50</th><th>p95</th><th>p99</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>GET /health/live</code></td>
+        <td>Routing and middleware only</td>
+        <td>17,946</td><td>2 ms</td><td>6 ms</td><td>9 ms</td>
+      </tr>
+      <tr>
+        <td><code>GET /api/v1/notes</code></td>
+        <td>JWT verify + SQLite read</td>
+        <td>12,750</td><td>3 ms</td><td>8 ms</td><td>12 ms</td>
+      </tr>
+      <tr>
+        <td><code>GET /style.css</code></td>
+        <td>5.9 KB static file from disk</td>
+        <td>5,966</td><td>3 ms</td><td>32 ms</td><td>55 ms</td>
+      </tr>
+      <tr>
+        <td><code>POST /api/v1/auth/login</code></td>
+        <td>Argon2id, deliberately expensive</td>
+        <td>49</td><td>311 ms</td><td>565 ms</td><td>642 ms</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Static files are the slowest thing here</h3>
+  <p>
+    A 5.9 KB stylesheet serves at a third the rate of a JSON response, because
+    every request reads it from disk — there is no in-memory asset cache. That is
+    fine for a docs site or an internal tool. If you are serving a large bundle
+    under real traffic, put a CDN or a reverse proxy in front and let the Rust
+    server do what it is good at, which is the API.
+  </p>
+
+  <h3>Why login is slow on purpose</h3>
+  <p>
+    That last row is not a defect. Argon2id reserves 19 MiB and burns CPU by
+    design — that is what makes stolen password hashes expensive to crack. A
+    single login costs about <strong>27 ms</strong> sequentially. Under
+    concurrency the server admits only as many hashes at once as it has cores,
+    so a login flood queues and sheds instead of exhausting memory.
+  </p>
+  <div class="note">
+    <strong>The number that matters:</strong> without that admission limit, 200
+    concurrent logins consumed <strong>212 seconds</strong> of CPU and could have
+    reserved gigabytes. With it, the same flood drains in <strong>5.1
+    seconds</strong> and the excess is shed — while unrelated traffic keeps
+    serving in single-digit milliseconds.
+  </div>
+
+  <h3>Reproduce it</h3>
+<pre><code>cargo build --release
+APP_RATE_LIMIT_BURST=1000000 APP_AUTH_RATE_LIMIT_BURST=1000000 \
+  ./target/release/axum-secure-starter
+
+ab -k -c 50 -n 20000 http://127.0.0.1:8443/health/live
+ab -k -c 50 -n 20000 -H "authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8443/api/v1/notes</code></pre>
+  <p>
+    Loopback numbers omit real network latency, and a production deployment adds
+    TLS. Treat these as the ceiling the application imposes, not a promise about
+    your infrastructure.
+  </p>
+</section>
+
+<section id="serving">
+  <h2>Serving a frontend</h2>
+  <p>
+    Point the server at a directory of built assets. Anything that does not match
+    an API route is served from it, and unknown paths fall back to
+    <code>index.html</code> so client-side routing works.
+  </p>
+<pre><code>APP_STATIC_DIR=./dist cargo run</code></pre>
+  <p>
+    This page is served that way. Build your frontend however you like, then hand
+    over the output directory — <code>dist/</code> for Vite, <code>build/</code>
+    for Create React App, <code>.output/public</code> for Nuxt.
+  </p>
+  <div class="note">
+    <strong>Same origin, no CORS.</strong> Serving the frontend from the same
+    server means the browser never issues a cross-origin request, so you can
+    leave <code>APP_CORS_ALLOWED_ORIGINS</code> empty. Only set it when the
+    frontend is genuinely on another origin.
+  </div>
+  <h3>Or put a proxy in front</h3>
+  <p>
+    Equally valid, and common in production: let nginx or Caddy serve the static
+    files and proxy <code>/api</code> to the server.
+  </p>
+<pre><code># Caddyfile
+bastionrs.dev {
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8443
+    }
+    handle {
+        root * /srv/frontend
+        try_files {path} /index.html
+        file_server
+    }
+}</code></pre>
+  <p>
+    If you do this, set <code>APP_TRUST_PROXY_HEADERS=true</code> so rate limiting
+    sees real client addresses instead of the proxy's — but only when the proxy is
+    yours, since otherwise a client can forge the header and bypass the limit.
+  </p>
+</section>
+
+<section id="client">
+  <h2>The API client</h2>
+  <p>
+    Every framework below shares the same core. The only part that needs care is
+    token refresh: access tokens last 15 minutes, refresh tokens are
+    <strong>single-use</strong> and rotate on every exchange. Store the newest
+    one and never retry with an old one — replaying a spent token is treated as
+    theft and revokes the whole session chain.
+  </p>
+
+  <h3>TypeScript</h3>
+<pre><code>// api.ts — framework-agnostic, works in any of the setups below
+const BASE = ""; // same origin when served by the Rust server
+
+type Tokens = { access_token: string; refresh_token: string; expires_in: number };
+
+let access: string | null = null;
+let refresh: string | null = localStorage.getItem("refresh") ?? null;
+
+function store(t: Tokens) {
+  access = t.access_token;
+  refresh = t.refresh_token;          // always the newest one
+  localStorage.setItem("refresh", t.refresh_token);
+}
+
+export async function login(email: string, password: string) {
+  const r = await fetch(`${BASE}/api/v1/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!r.ok) throw await apiError(r);
+  store(await r.json());
+}
+
+/** Fetch with the access token, refreshing once on 401. */
+export async function api(path: string, init: RequestInit = {}): Promise&lt;Response&gt; {
+  const send = () =>
+    fetch(`${BASE}${path}`, {
+      ...init,
+      headers: {
+        ...init.headers,
+        ...(access ? { authorization: `Bearer ${access}` } : {}),
+      },
+    });
+
+  let res = await send();
+  if (res.status === 401 && refresh) {
+    const r = await fetch(`${BASE}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refresh_token: refresh }),
+    });
+    if (!r.ok) {          // refresh rejected: the session is over
+      access = refresh = null;
+      localStorage.removeItem("refresh");
+      throw await apiError(r);
+    }
+    store(await r.json());
+    res = await send();   // one retry, never a loop
+  }
+  return res;
+}
+
+async function apiError(r: Response) {
+  const body = await r.json().catch(() => null);
+  return new Error(body?.error?.message ?? `HTTP ${r.status}`);
+}</code></pre>
+
+  <div class="note">
+    <strong>One retry, not a loop.</strong> If the refresh itself fails, clear the
+    tokens and send the user to the login screen. Retrying a rejected refresh in a
+    loop will hammer the auth rate limit and lock the account out.
+  </div>
+
+  <h3>Vanilla JavaScript</h3>
+  <p>The same file with the types removed — no build step, load it as a module.</p>
+<pre><code>&lt;script type="module" src="/api.js"&gt;&lt;/script&gt;</code></pre>
+</section>
+
+<section id="frameworks">
+  <h2>JS &amp; TS frameworks</h2>
+  <p>
+    Every one of these builds to static files, which is all the server needs. The
+    pattern is identical: build, then point <code>APP_STATIC_DIR</code> at the
+    output.
+  </p>
+
+  <div class="tabs" role="tablist" id="fw-tabs">
+    <button class="tab" role="tab" data-panel="fw-vanilla" aria-selected="true">Vanilla</button>
+    <button class="tab" role="tab" data-panel="fw-vite">Vite + TS</button>
+    <button class="tab" role="tab" data-panel="fw-react">React</button>
+    <button class="tab" role="tab" data-panel="fw-vue">Vue</button>
+    <button class="tab" role="tab" data-panel="fw-svelte">Svelte</button>
+  </div>
+
+  <div class="panel" id="fw-vanilla">
+    <p>No build step at all. Write files, serve the folder.</p>
+<pre><code>public/
+  index.html
+  api.js
+  style.css
+
+APP_STATIC_DIR=./public cargo run</code></pre>
+<pre><code>&lt;!-- index.html --&gt;
+&lt;script type="module"&gt;
+  import { login, api } from "/api.js";
+
+  document.querySelector("#login").addEventListener("submit", async (e) =&gt; {
+    e.preventDefault();
+    await login(email.value, password.value);
+    const notes = await (await api("/api/v1/notes")).json();
+    render(notes.items);
+  });
+&lt;/script&gt;</code></pre>
+    <p>
+      Note the module lives in a file rather than inline — the page CSP does not
+      allow <code>'unsafe-inline'</code>, which is what stops an injected
+      <code>&lt;script&gt;</code> from executing. See
+      <a href="#csp">CSP &amp; headers</a>.
+    </p>
+  </div>
+
+  <div class="panel" id="fw-vite" hidden>
+<pre><code>npm create vite@latest frontend -- --template vanilla-ts
+cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+
+APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
+    <p>For development, run Vite's dev server and proxy the API to Rust:</p>
+<pre><code>// vite.config.ts
+export default {
+  server: {
+    proxy: { "/api": "http://127.0.0.1:8443" },
+  },
+};</code></pre>
+    <p>
+      That keeps hot reload while the API stays same-origin from the browser's
+      point of view, so no CORS configuration is needed in development either.
+    </p>
+  </div>
+
+  <div class="panel" id="fw-react" hidden>
+<pre><code>npm create vite@latest frontend -- --template react-ts
+cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+
+APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
+<pre><code>// useAuth.ts — the client above, wrapped in a hook
+import { useState, useCallback } from "react";
+import { login as apiLogin, api } from "./api";
+
+export function useAuth() {
+  const [user, setUser] = useState&lt;string | null&gt;(null);
+  const [error, setError] = useState&lt;string | null&gt;(null);
+
+  const signIn = useCallback(async (email: string, password: string) =&gt; {
+    try {
+      await apiLogin(email, password);
+      setUser(email);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);   // "authentication required"
+    }
+  }, []);
+
+  return { user, error, signIn };
+}</code></pre>
+    <p>
+      React Router works unchanged: the server's <code>index.html</code> fallback
+      means a deep link like <code>/notes/42</code> reaches your router instead of
+      returning 404.
+    </p>
+  </div>
+
+  <div class="panel" id="fw-vue" hidden>
+<pre><code>npm create vite@latest frontend -- --template vue-ts
+cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+
+APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
+<pre><code>// stores/auth.ts — Pinia
+import { defineStore } from "pinia";
+import { login as apiLogin, api } from "../api";
+
+export const useAuth = defineStore("auth", {
+  state: () =&gt; ({ user: null as string | null, error: null as string | null }),
+  actions: {
+    async signIn(email: string, password: string) {
+      try {
+        await apiLogin(email, password);
+        this.user = email;
+      } catch (e) {
+        this.error = (e as Error).message;
+      }
+    },
+  },
+});</code></pre>
+  </div>
+
+  <div class="panel" id="fw-svelte" hidden>
+<pre><code>npm create vite@latest frontend -- --template svelte-ts
+cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+
+APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
+<pre><code>// auth.ts — a store
+import { writable } from "svelte/store";
+import { login as apiLogin } from "./api";
+
+export const user = writable&lt;string | null&gt;(null);
+
+export async function signIn(email: string, password: string) {
+  await apiLogin(email, password);
+  user.set(email);
+}</code></pre>
+    <p>
+      For SvelteKit, use <code>adapter-static</code> so the build produces plain
+      files. Server-side rendering would need the API reachable from the Node
+      process, which is a different deployment shape than this server assumes.
+    </p>
+  </div>
+</section>
+
+<section id="css">
+  <h2>CSS frameworks</h2>
+  <p>
+    Anything that compiles to a stylesheet works, because the server only serves
+    files. The one rule: the output must be a <em>file</em>, not injected inline,
+    since the page CSP does not permit inline styles.
+  </p>
+
+  <div class="tabs" role="tablist" id="css-tabs">
+    <button class="tab" role="tab" data-panel="css-plain" aria-selected="true">Plain CSS</button>
+    <button class="tab" role="tab" data-panel="css-tailwind">Tailwind</button>
+    <button class="tab" role="tab" data-panel="css-sass">Sass</button>
+  </div>
+
+  <div class="panel" id="css-plain">
+    <p>Nothing to configure. A stylesheet in the served directory, linked normally.</p>
+<pre><code>&lt;link rel="stylesheet" href="/style.css"&gt;</code></pre>
+    <p>
+      This page is exactly that: one hand-written stylesheet, no build step, no
+      framework. Its source is <code>bastion/style.css</code> in the repository.
+    </p>
+  </div>
+
+  <div class="panel" id="css-tailwind" hidden>
+<pre><code>npm install -D tailwindcss @tailwindcss/vite</code></pre>
+<pre><code>// vite.config.ts
+import tailwindcss from "@tailwindcss/vite";
+export default { plugins: [tailwindcss()] };</code></pre>
+<pre><code>/* main.css */
+@import "tailwindcss";</code></pre>
+    <p>
+      Vite emits a hashed stylesheet into <code>dist/assets/</code> and links it
+      from the built <code>index.html</code>. Serve <code>dist/</code> and it
+      works — the CSP is satisfied because the CSS is a file on the same origin.
+    </p>
+  </div>
+
+  <div class="panel" id="css-sass" hidden>
+<pre><code>npm install -D sass</code></pre>
+    <p>
+      Vite compiles <code>.scss</code> with no further configuration. Import it
+      from your entry module and the build emits a plain stylesheet:
+    </p>
+<pre><code>import "./styles/main.scss";</code></pre>
+  </div>
+</section>
+
+<section id="endpoints">
+  <h2>Endpoints</h2>
+  <p>Base path <code>/api/v1</code>, except the probes.</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Body</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td><code>/health/live</code></td><td>—</td><td>—</td></tr>
+      <tr><td>GET</td><td><code>/health/ready</code></td><td>—</td><td>—</td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/register</code></td><td>—</td><td><code>{email, password}</code></td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/login</code></td><td>—</td><td><code>{email, password}</code></td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/refresh</code></td><td>—</td><td><code>{refresh_token}</code></td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/logout</code></td><td>—</td><td><code>{refresh_token}</code></td></tr>
+      <tr><td>POST</td><td><code>/api/v1/auth/password</code></td><td>Bearer</td><td><code>{current_password, new_password}</code></td></tr>
+      <tr><td>GET / POST</td><td><code>/api/v1/notes</code></td><td>Bearer</td><td><code>{title, body}</code></td></tr>
+      <tr><td>GET / PUT / DELETE</td><td><code>/api/v1/notes/{id}</code></td><td>Bearer</td><td><code>{title, body}</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/v1/admin/users/{id}/sessions</code></td><td>Bearer (admin)</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section id="errors">
+  <h2>Errors</h2>
+  <p>One shape everywhere, so clients branch on <code>code</code> rather than prose.</p>
+<pre><code>{
+  "error": {
+    "code": "validation_failed",
+    "message": "request validation failed",
+    "details": [ { "field": "email", "message": "must be a valid email address" } ]
+  }
+}</code></pre>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Status</th><th>code</th><th>What your UI should do</th></tr></thead>
+    <tbody>
+      <tr><td>400</td><td><code>validation_failed</code></td><td>Show <code>details</code> against the named fields</td></tr>
+      <tr><td>401</td><td><code>unauthorized</code></td><td>Refresh once; if that fails, show the login screen</td></tr>
+      <tr><td>403</td><td><code>forbidden</code></td><td>Hide the action — the user is not permitted</td></tr>
+      <tr><td>404</td><td><code>not_found</code></td><td>Treat as absent; it may exist but not be yours</td></tr>
+      <tr><td>409</td><td><code>conflict</code></td><td>Email already registered</td></tr>
+      <tr><td>429</td><td>—</td><td>Back off; do not retry in a tight loop</td></tr>
+      <tr><td>503</td><td><code>service_unavailable</code></td><td>Server shedding load; retry with backoff</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    <strong>Two deliberate behaviours.</strong> Someone else's resource returns
+    <strong>404, not 403</strong> — a 403 would confirm the id exists. And every
+    login failure returns the same <strong>401</strong>: wrong password, unknown
+    address, and locked account are indistinguishable by status, body, and timing.
+    Do not write UI copy that claims to know which it was.
+  </div>
+</section>
+
+<section id="csp">
+  <h2>CSP &amp; headers</h2>
+  <p>
+    The server sends two different policies, because an API and a web page need
+    different things and merging them weakens both.
+  </p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th></th><th>API routes</th><th>Served pages</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Content-Security-Policy</td>
+        <td><code>default-src 'none'; sandbox</code></td>
+        <td><code>default-src 'self'</code>, no inline</td>
+      </tr>
+      <tr><td>Cache-Control</td><td><code>no-store</code></td><td><code>public, max-age=3600</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Both get the same baseline on every response:</p>
+<pre><code>strict-transport-security: max-age=31536000; includeSubDomains; preload
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: no-referrer
+cross-origin-opener-policy: same-origin
+cross-origin-resource-policy: same-origin
+permissions-policy: camera=(), geolocation=(), microphone=(), payment=(), usb=()
+x-request-id: &lt;uuid, echoed back for correlation&gt;</code></pre>
+
+  <h3>What this means for your frontend</h3>
+  <ul>
+    <li><strong>No inline scripts or styles.</strong> No <code>&lt;script&gt;alert(1)&lt;/script&gt;</code>, no <code>style="…"</code> attributes, no <code>onclick=</code> handlers. Put code in files and attach listeners in JavaScript. Every bundler already does this.</li>
+    <li><strong>Same-origin only.</strong> No CDN scripts, fonts, or images. Install the dependency and let your bundler emit it locally.</li>
+    <li><strong>Tokens live in memory, refresh tokens in <code>localStorage</code>.</strong> With inline execution blocked and <code>frame-ancestors 'none'</code> set, the usual paths to stealing them are closed.</li>
+  </ul>
+  <p>
+    If a framework insists on inline styles, prefer configuring it to emit a file
+    over relaxing the policy. <code>'unsafe-inline'</code> removes most of what
+    CSP is protecting you from.
+  </p>
+</section>
+
+<footer>
+  <p>
+    Bastion — documentation for
+    <a href="https://github.com/umkara/axum-secure-starter">axum-secure-starter</a>.
+    MIT licensed. Benchmarks measured on Apple M2, 8 cores; reproduce them with
+    the commands in <a href="#performance">Performance</a>.
+  </p>
+</footer>
+
+</main>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

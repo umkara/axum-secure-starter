@@ -780,3 +780,120 @@ async fn slow_handlers_do_not_hold_a_connection_forever() {
         .unwrap();
     assert_eq!(response.status(), 200);
 }
+
+// ---------------------------------------------------------------------------
+// Serving a frontend
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_served_page_gets_the_page_policy_while_the_api_keeps_the_strict_one() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "<!doctype html><p>hi</p>").unwrap();
+    std::fs::write(dir.path().join("app.js"), "export const x = 1;").unwrap();
+
+    let app = spawn_with(TestOptions {
+        static_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+
+    // The page can load its own scripts and styles...
+    let page = app.client.get(app.url("/")).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    let page_csp = page.headers()["content-security-policy"].to_str().unwrap();
+    assert!(
+        page_csp.contains("default-src 'self'"),
+        "page CSP: {page_csp}"
+    );
+    assert!(
+        !page_csp.contains("unsafe-inline"),
+        "inline execution must stay blocked: {page_csp}"
+    );
+
+    // ...while the API keeps the policy that permits nothing at all. Adding a
+    // frontend must not loosen the API's headers.
+    let api = app
+        .client
+        .get(app.url("/health/live"))
+        .send()
+        .await
+        .unwrap();
+    let api_csp = api.headers()["content-security-policy"].to_str().unwrap();
+    assert!(api_csp.contains("default-src 'none'"), "API CSP: {api_csp}");
+    assert!(api_csp.contains("sandbox"), "API CSP: {api_csp}");
+    assert!(
+        api.headers()["cache-control"]
+            .to_str()
+            .unwrap()
+            .contains("no-store"),
+        "API responses must stay uncached"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_api_path_stays_json_rather_than_serving_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "<!doctype html><p>hi</p>").unwrap();
+
+    let app = spawn_with(TestOptions {
+        static_dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    })
+    .await;
+
+    // A client-side router should handle unknown *page* paths...
+    let page = app
+        .client
+        .get(app.url("/some/deep/link"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 200, "SPA fallback should serve index.html");
+
+    // ...but a wrong API path is a client error, not a request for the app.
+    let api = app
+        .client
+        .get(app.url("/api/v1/nope"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(api.status(), 404);
+    let body: Value = api.json().await.unwrap();
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn static_serving_cannot_escape_its_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let public = root.path().join("public");
+    std::fs::create_dir(&public).unwrap();
+    std::fs::write(public.join("index.html"), "<!doctype html><p>hi</p>").unwrap();
+    // A file the server must never hand out, one level above the served root.
+    std::fs::write(root.path().join("secret.txt"), "SENSITIVE").unwrap();
+
+    let app = spawn_with(TestOptions {
+        static_dir: Some(public.clone()),
+        ..Default::default()
+    })
+    .await;
+
+    for path in [
+        "/../secret.txt",
+        "/..%2fsecret.txt",
+        "/%2e%2e/secret.txt",
+        "/....//secret.txt",
+        "/public/../secret.txt",
+    ] {
+        let response = app
+            .client
+            .get(format!("{}{}", app.base_url, path))
+            .send()
+            .await
+            .unwrap();
+        let body = response.text().await.unwrap();
+        assert!(
+            !body.contains("SENSITIVE"),
+            "{path} escaped the served directory"
+        );
+    }
+}

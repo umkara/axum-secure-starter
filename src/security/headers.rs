@@ -14,6 +14,12 @@ const CONTENT_SECURITY_POLICY: &str =
 
 const PERMISSIONS_POLICY: &str = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
+/// Policy for served pages, which — unlike the API — legitimately load styles,
+/// scripts, and images. Still same-origin only, with no inline execution: a
+/// frontend that needs `unsafe-inline` should move that code into a file
+/// rather than have every page relax the policy.
+const PAGE_CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
 /// One year, including subdomains, and preload-eligible. Only meaningful over
 /// HTTPS; browsers ignore it on plaintext connections.
 const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000; includeSubDomains; preload";
@@ -72,5 +78,21 @@ impl SecurityHeaders {
 
     pub fn hsts() -> SetResponseHeaderLayer<HeaderValue> {
         static_header!(header::STRICT_TRANSPORT_SECURITY, STRICT_TRANSPORT_SECURITY)
+    }
+
+    /// The CSP for served pages. Kept separate from the API policy so that
+    /// adding a frontend cannot quietly loosen the policy protecting the API.
+    pub fn page_content_security_policy() -> SetResponseHeaderLayer<HeaderValue> {
+        static_header!(
+            header::CONTENT_SECURITY_POLICY,
+            PAGE_CONTENT_SECURITY_POLICY
+        )
+    }
+
+    /// Static assets are public and unchanging between deploys; `no-store`
+    /// would make every page load re-fetch them. Build pipelines that emit
+    /// content-hashed filenames can raise this considerably.
+    pub fn asset_cache() -> SetResponseHeaderLayer<HeaderValue> {
+        static_header!(header::CACHE_CONTROL, "public, max-age=3600")
     }
 }

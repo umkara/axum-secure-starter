@@ -30,6 +30,7 @@ use tower_http::{
     limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
+    services::{ServeDir, ServeFile},
     timeout::TimeoutLayer,
     trace::TraceLayer,
 };
@@ -81,12 +82,39 @@ pub fn build_router(state: AppState) -> Router {
         config.rate_limit.global_burst,
     );
 
-    let versioned = Router::new().merge(auth_routes).merge(api_routes);
+    // The API's own fallback stays JSON: an unknown `/api/v1/...` path is a
+    // client error, not a request for the frontend's index page.
+    let versioned = Router::new()
+        .merge(auth_routes)
+        .merge(api_routes)
+        .fallback(not_found);
 
-    let router = Router::new()
+    // The strict response headers belong to the API alone. A page that loads
+    // stylesheets and scripts cannot live under `default-src 'none'`, and the
+    // usual way that gets "fixed" is by loosening the policy for everything —
+    // which is how adding a frontend quietly weakens an API.
+    let api = Router::new()
         .merge(health_routes)
         .nest("/api/v1", versioned)
-        .fallback(not_found);
+        .layer(
+            ServiceBuilder::new()
+                .layer(SecurityHeaders::content_security_policy())
+                .layer(SecurityHeaders::no_store()),
+        );
+
+    // Prebuilt frontend assets, when configured. Unknown paths fall back to
+    // `index.html` so a client-side router can handle them, and these responses
+    // carry the page CSP and a cache lifetime rather than the API's.
+    let router = match &config.server.static_dir {
+        Some(dir) => {
+            let files = ServiceBuilder::new()
+                .layer(SecurityHeaders::page_content_security_policy())
+                .layer(SecurityHeaders::asset_cache())
+                .service(ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html"))));
+            api.fallback_service(files)
+        }
+        None => api.fallback(not_found),
+    };
 
     // Listed outermost first. Order matters: panics are caught above
     // everything so a panic still produces a well-formed response, and body
@@ -106,14 +134,12 @@ pub fn build_router(state: AppState) -> Router {
         ]))
         .layer(TraceLayer::new_for_http())
         .layer(SecurityHeaders::hsts())
-        .layer(SecurityHeaders::content_security_policy())
         .layer(SecurityHeaders::no_sniff())
         .layer(SecurityHeaders::frame_options())
         .layer(SecurityHeaders::referrer_policy())
         .layer(SecurityHeaders::permissions_policy())
         .layer(SecurityHeaders::cross_origin_resource_policy())
         .layer(SecurityHeaders::cross_origin_opener_policy())
-        .layer(SecurityHeaders::no_store())
         .layer(cors_layer(&config))
         // Converts the failures produced by the two layers below into the
         // API's error shape instead of an opaque 500.

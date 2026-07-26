@@ -75,6 +75,10 @@ pub struct ServerConfig {
     pub max_concurrent_streams: u32,
     /// Time allowed for in-flight requests to finish during shutdown.
     pub shutdown_grace: Duration,
+    /// Directory of prebuilt frontend assets to serve. When set, anything not
+    /// matching an API route is served from here, with unknown paths falling
+    /// back to `index.html` so client-side routing works.
+    pub static_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +164,7 @@ impl ServerConfig {
             tls_handshake_timeout: seconds("APP_TLS_HANDSHAKE_TIMEOUT_SECS", 10)?,
             max_concurrent_streams: parse_or("APP_MAX_CONCURRENT_STREAMS", 128u32)?,
             shutdown_grace: seconds("APP_SHUTDOWN_GRACE_SECS", 20)?,
+            static_dir: env::var("APP_STATIC_DIR").ok().map(PathBuf::from),
         })
     }
 }

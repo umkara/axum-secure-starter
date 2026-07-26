@@ -63,6 +63,7 @@ pub struct TestOptions {
     pub bootstrap_admin: Option<(String, String)>,
     pub cors_allowed_origins: Vec<String>,
     pub max_concurrent_hashes: usize,
+    pub static_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for TestOptions {
@@ -76,6 +77,7 @@ impl Default for TestOptions {
             bootstrap_admin: None,
             cors_allowed_origins: vec![],
             max_concurrent_hashes: 4,
+            static_dir: None,
         }
     }
 }
@@ -100,6 +102,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
             tls_handshake_timeout: Duration::from_secs(10),
             max_concurrent_streams: 128,
             shutdown_grace: Duration::from_secs(1),
+            static_dir: options.static_dir.clone(),
         },
         tls: None,
         database: DatabaseConfig {

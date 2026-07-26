@@ -492,6 +492,7 @@ src/
 migrations/     schema
 tests/          integration and adversarial suites
 tools/          browser API console
+bastion/        documentation site (served by the server itself)
 ```
 
 Dependencies point inward. Nothing below `api` knows HTTP exists; nothing above
@@ -499,6 +500,48 @@ Dependencies point inward. Nothing below `api` knows HTTP exists; nothing above
 in exactly one file, `state.rs`, so substituting any of them is a local change.
 
 ---
+
+## Serving a frontend
+
+Point the server at a directory of built assets:
+
+```bash
+APP_STATIC_DIR=./bastion cargo run
+```
+
+Anything not matching an API route is served from there, with unknown paths
+falling back to `index.html` so client-side routing works. Serving the frontend
+from the same origin also means the browser never makes a cross-origin request,
+so `APP_CORS_ALLOWED_ORIGINS` can stay empty.
+
+Served pages get their own `Content-Security-Policy` — `default-src 'self'`
+with no inline execution — and a cache lifetime, while the API keeps
+`default-src 'none'; sandbox` and `no-store`. Keeping the two profiles separate
+is what stops adding a frontend from quietly loosening the policy protecting the
+API; a test asserts both.
+
+The included docs site, **Bastion**, is served this way and documents the whole
+API plus integration guides for vanilla JS, TypeScript, React, Vue, Svelte,
+Tailwind, and Sass.
+
+## Performance
+
+Measured on an Apple M2 (8 cores), release build, loopback, `ab -k -c 50
+-n 20000`, with rate limits raised so the figures reflect the server rather than
+the limiter:
+
+| Endpoint | Work | req/s | p50 | p99 |
+| --- | --- | --- | --- | --- |
+| `GET /health/live` | routing + middleware | 17,946 | 2 ms | 9 ms |
+| `GET /api/v1/notes` | JWT verify + SQLite read | 12,750 | 3 ms | 12 ms |
+| `GET /style.css` | 5.9 KB file from disk | 5,966 | 3 ms | 55 ms |
+| `POST /api/v1/auth/login` | Argon2id | 49 | 311 ms | 642 ms |
+
+Zero failures across 40,000 requests. The login figure is the hashing cost
+working as intended — a single login is ~27 ms sequentially, and concurrent
+hashing is capped so a flood sheds instead of exhausting memory. Static files
+are the slowest path because every request reads from disk; put a CDN or proxy
+in front if you serve a large bundle under real traffic.
 
 ## Security design
 
