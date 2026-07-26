@@ -4,11 +4,13 @@
 pub mod error;
 pub mod health_repository;
 pub mod note_repository;
+pub mod set;
 pub mod token_repository;
 pub mod user_repository;
 
 pub use error::{RepositoryError, RepositoryResult};
 pub use health_repository::{HealthRepository, SqliteHealthRepository};
 pub use note_repository::{NoteRepository, SqliteNoteRepository};
+pub use set::Repositories;
 pub use token_repository::{ExpiredTokenSweeper, SqliteTokenRepository, TokenRepository};
 pub use user_repository::{SqliteUserRepository, UserRepository};

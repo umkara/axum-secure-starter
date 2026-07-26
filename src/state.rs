@@ -10,15 +10,9 @@
 
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
-
 use crate::{
     config::AppConfig,
-    repository::{
-        ExpiredTokenSweeper, HealthRepository, NoteRepository, SqliteHealthRepository,
-        SqliteNoteRepository, SqliteTokenRepository, SqliteUserRepository, TokenRepository,
-        UserRepository,
-    },
+    repository::{HealthRepository, Repositories},
     security::{CredentialHasher, TokenIssuer, jwt::JwtCodec, password::Argon2Hasher},
     service::{AccountService, AuthService, NoteService, SessionService, TokenJanitor},
 };
@@ -35,31 +29,25 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(config: Arc<AppConfig>, pool: SqlitePool) -> Self {
-        let users: Arc<dyn UserRepository> = Arc::new(SqliteUserRepository::new(pool.clone()));
-        let note_repo: Arc<dyn NoteRepository> = Arc::new(SqliteNoteRepository::new(pool.clone()));
-        let health: Arc<dyn HealthRepository> = Arc::new(SqliteHealthRepository::new(pool.clone()));
-
-        // One SQLite type satisfies both token interfaces; the services still
-        // see only the slice each of them needs.
-        let token_store = Arc::new(SqliteTokenRepository::new(pool));
-        let tokens: Arc<dyn TokenRepository> = token_store.clone();
-        let sweeper: Arc<dyn ExpiredTokenSweeper> = token_store;
-
+    /// Wires the services over an already-chosen set of repositories. Which
+    /// database backs them is decided by whoever built the [`Repositories`], not
+    /// here — this function names no concrete store.
+    pub fn new(config: Arc<AppConfig>, repos: Repositories) -> Self {
         let token_issuer: Arc<dyn TokenIssuer> = Arc::new(JwtCodec::new(&config.security));
         let hasher: Arc<dyn CredentialHasher> =
             Arc::new(Argon2Hasher::new(config.security.max_concurrent_hashes));
 
-        let accounts = Arc::new(AccountService::new(users, hasher, &config.security));
+        let accounts = Arc::new(AccountService::new(repos.users, hasher, &config.security));
         let sessions = Arc::new(SessionService::new(
-            tokens,
+            repos.tokens,
             token_issuer.clone(),
             &config.security,
         ));
 
         let auth = Arc::new(AuthService::new(accounts, sessions));
-        let notes = Arc::new(NoteService::new(note_repo));
-        let janitor = Arc::new(TokenJanitor::new(sweeper));
+        let notes = Arc::new(NoteService::new(repos.notes));
+        let janitor = Arc::new(TokenJanitor::new(repos.sweeper));
+        let health = repos.health;
 
         Self {
             config,

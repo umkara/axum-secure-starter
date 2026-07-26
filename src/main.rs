@@ -5,7 +5,8 @@ use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use axum_secure_starter::{
-    config::AppConfig, db, server, service::AdminBootstrap, state::AppState, telemetry,
+    config::AppConfig, db, repository::Repositories, server, service::AdminBootstrap,
+    state::AppState, telemetry,
 };
 use axum_server::Handle;
 use tokio::signal;
@@ -28,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = std::sync::Arc::new(config);
     let pool = db::connect(&config.database).await?;
-    let state = AppState::new(config.clone(), pool);
+    let state = AppState::new(config.clone(), Repositories::sqlite(pool));
 
     if let Some(bootstrap) = &config.bootstrap_admin {
         match state

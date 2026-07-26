@@ -13,7 +13,9 @@ use axum_secure_starter::{
         AppConfig, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig, SecurityConfig,
         ServerConfig,
     },
-    db, server,
+    db,
+    repository::Repositories,
+    server,
     service::AuthService,
     state::AppState,
 };
@@ -138,7 +140,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
     let pool = db::connect(&config.database)
         .await
         .expect("failed to prepare the test database");
-    let state = AppState::new(config.clone(), pool);
+    let state = AppState::new(config.clone(), Repositories::sqlite(pool));
 
     if let Some(bootstrap) = &config.bootstrap_admin {
         state
