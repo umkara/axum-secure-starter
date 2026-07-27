@@ -35,6 +35,42 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
+  example-ecommerce:
+    name: Example builds
+    runs-on: ubuntu-latest
+    # The example is a separate toolchain that nothing else in CI would catch
+    # breaking. It builds without a Bastion instance because no Bastion call
+    # happens at build time — which is itself worth keeping true.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: examples/ecommerce/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: examples/ecommerce
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: examples/ecommerce
+        run: pnpm typecheck
+
+      - name: Build
+        working-directory: examples/ecommerce
+        # Config is parsed at module load and throws when a secret is missing,
+        # so the build needs values — any valid ones.
+        env:
+          BETTER_AUTH_SECRET: build-only-not-a-real-secret-000000000000
+          BASTION_TOKEN_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: pnpm build
+
   audit:
     name: Dependency advisories
     runs-on: ubuntu-latest

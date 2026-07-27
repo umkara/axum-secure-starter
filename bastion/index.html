@@ -308,9 +308,9 @@ async function apiError(r: Response) {
 <section id="frameworks">
   <h2>JS &amp; TS frameworks</h2>
   <p>
-    Every one of these builds to static files, which is all the server needs. The
-    pattern is identical: build, then point <code>APP_STATIC_DIR</code> at the
-    output.
+    The first five build to static files, which is all the server needs: build,
+    then point <code>APP_STATIC_DIR</code> at the output. Next.js is the
+    exception — it runs as its own process and calls the API server-side.
   </p>
 
   <div class="tabs" role="tablist" id="fw-tabs">
@@ -319,6 +319,7 @@ async function apiError(r: Response) {
     <button class="tab" role="tab" data-panel="fw-react">React</button>
     <button class="tab" role="tab" data-panel="fw-vue">Vue</button>
     <button class="tab" role="tab" data-panel="fw-svelte">Svelte</button>
+    <button class="tab" role="tab" data-panel="fw-next">Next.js</button>
   </div>
 
   <div class="panel" id="fw-vanilla">
@@ -441,6 +442,40 @@ export async function signIn(email: string, password: string) {
       For SvelteKit, use <code>adapter-static</code> so the build produces plain
       files. Server-side rendering would need the API reachable from the Node
       process, which is a different deployment shape than this server assumes.
+    </p>
+  </div>
+
+  <div class="panel" id="fw-next" hidden>
+    <p>
+      The odd one out. Next.js does <em>not</em> go behind
+      <code>APP_STATIC_DIR</code> — a static export emits an inline bootstrap
+      script, and the page CSP is <code>script-src 'self'</code> with no
+      <code>unsafe-inline</code>, so it would never hydrate. Next runs as its own
+      Node process and calls this server from the server side.
+    </p>
+    <p>
+      That turns out to be the better shape anyway: tokens stay in Node, the
+      browser never holds a refresh token, and since the calls are
+      server-to-server, CORS never enters the picture — leave
+      <code>APP_CORS_ALLOWED_ORIGINS</code> empty.
+    </p>
+<pre><code>Browser ──cookie──&gt; Next (Node) ──Bearer token──&gt; this server
+                       │
+                       └── its own database: catalogue, carts, orders</code></pre>
+    <p>
+      There is a complete worked example in the repository:
+      <code>examples/ecommerce</code>, a storefront on Next 16 + BetterAuth +
+      Drizzle where this server is the credential authority. Its
+      <code>src/lib/bastion/</code> directory is a drop-in BetterAuth plugin —
+      copy it, set the environment, done.
+    </p>
+    <p>
+      The part worth reading regardless of framework is how it handles refresh.
+      Refresh tokens here are single-use, and <em>losing</em> the rotation race
+      revokes the whole family — so two concurrent refreshes sign the user out
+      everywhere. The example serialises refresh through a database lease with a
+      compare-and-swap, rather than an in-process lock that would not survive a
+      second instance.
     </p>
   </div>
 </section>

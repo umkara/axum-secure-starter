@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/*
+ * Tailwind 4 is configured in CSS, not a JS config file. The palette leans on
+ * the same green Bastion uses for its own docs so the example reads as part of
+ * the project rather than a stranger.
+ */
+@theme {
+  --color-bark-50: #f4f7f4;
+  --color-bark-100: #e3ebe3;
+  --color-bark-200: #c7d8c8;
+  --color-bark-600: #3f6b47;
+  --color-bark-700: #325639;
+  --color-bark-900: #1b2f20;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-bark-50 text-bark-900 antialiased;
+}

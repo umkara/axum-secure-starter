@@ -35,6 +35,7 @@ request](#your-first-request) to try it.
 - [Deploying](#deploying)
 - [Adapting it to your project](#adapting-it-to-your-project)
 - [Running the tests](#running-the-tests)
+- [Examples](#examples)
 - [Project layout](#project-layout)
 - [Security design](#security-design)
 - [Scope and limitations](#scope-and-limitations)
@@ -475,6 +476,22 @@ every push, plus the advisory scan weekly.
 
 ---
 
+## Examples
+
+**[`examples/ecommerce`](examples/ecommerce)** — a Next.js 16 storefront that
+uses this server as its credential authority. Catalogue, carts and orders live
+in the app's own SQLite database; accounts, passwords and refresh-token rotation
+stay here. The integration is packaged as a copy-pasteable
+[`src/lib/bastion/`](examples/ecommerce/src/lib/bastion/README.md) directory that
+plugs into BetterAuth, so it can be lifted into any Next app.
+
+It is worth reading even if you do not use Next: it works through the three
+constraints this server imposes on a browser-facing client — a page CSP with no
+inline scripts, `allow_credentials(false)`, and single-use refresh tokens whose
+lost rotation race revokes the whole family — and shows what each one costs.
+
+---
+
 ## Project layout
 
 ```
@@ -493,6 +510,7 @@ migrations/     schema
 tests/          integration and adversarial suites
 tools/          browser API console
 bastion/        documentation site (served by the server itself)
+examples/       runnable apps built on this server
 ```
 
 Dependencies point inward. Nothing below `api` knows HTTP exists; nothing above
@@ -522,7 +540,8 @@ API; a test asserts both.
 
 The included docs site, **Bastion**, is served this way and documents the whole
 API plus integration guides for vanilla JS, TypeScript, React, Vue, Svelte,
-Tailwind, and Sass.
+Next.js, Tailwind, and Sass. Next.js is the one that does *not* go behind
+`APP_STATIC_DIR` — see [Examples](#examples).
 
 ## Performance
 

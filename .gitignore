@@ -9,3 +9,10 @@
 .claude-flow/
 /dist
 deploy/oracle/env.production
+
+# examples/ are self-contained apps with their own toolchains
+examples/*/node_modules
+examples/*/.next
+examples/*/out
+examples/*/drizzle
+.env.local
