@@ -502,6 +502,26 @@ export async function login(email: string, password: string): Promise&lt;Tokens&
   return res.json();
 }
 
+export async function refresh(refreshToken: string): Promise&lt;Tokens&gt; {
+  const res = await fetch(`${BASE}/auth/refresh`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`refresh failed: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function logout(refreshToken: string): Promise&lt;void&gt; {
+  await fetch(`${BASE}/auth/logout`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: "no-store",
+  });
+}
+
 export async function apiFetch(path: string, accessToken: string, init?: RequestInit) {
   return fetch(`${BASE}${path}`, {
     ...init,
@@ -514,6 +534,31 @@ export async function apiFetch(path: string, accessToken: string, init?: Request
       this server does before it looks the account up. Skip it and
       <code>&nbsp;Alice@example.com&nbsp;</code> becomes one account here and two
       rows in your database.
+    </p>
+
+    <h3>Where the tokens live</h3>
+    <p>
+      In a table of your own, one row per session — not one per user. The cookie
+      holds the row's id and nothing else.
+    </p>
+<pre><code>CREATE TABLE session (
+  id            TEXT PRIMARY KEY,
+  user_id       TEXT    NOT NULL,   -- this server's uuid, from the `sub` claim
+  email         TEXT    NOT NULL,
+  role          TEXT    NOT NULL,
+  access_token  TEXT    NOT NULL,   -- encrypt these at rest
+  refresh_token TEXT    NOT NULL,
+  expires_at    INTEGER NOT NULL,   -- ms since epoch, from the `exp` claim
+  generation    INTEGER NOT NULL DEFAULT 0,   -- bumped on every rotation
+  locked_until  INTEGER,                      -- the refresh lease
+  created_at    INTEGER NOT NULL
+);</code></pre>
+    <p>
+      <code>generation</code> and <code>locked_until</code> look like overhead
+      until you read the refresh section below — they are what stop two requests
+      refreshing at once. Seal the two token columns with AES-256-GCM or your
+      platform's equivalent: a refresh token in plaintext is a standing account
+      takeover for anyone who gets a copy of the file.
     </p>
 
     <h3>Signing in</h3>
@@ -537,7 +582,7 @@ export async function signIn(_state: unknown, form: FormData) {
     return { error: "Invalid email or password." };
   }
 
-  const sessionId = await createSession(tokens);
+  const sessionId = await createSession(String(form.get("email")), tokens);
 
   (await cookies()).set("session", sessionId, {
     httpOnly: true,
@@ -576,6 +621,107 @@ function claims(accessToken: string) {
       it all arrives from one IP.
     </div>
 
+    <h3>The session module</h3>
+    <p>
+      Everything above, tied together. <code>requireUser</code> is what your
+      pages call, and note what it does <em>not</em> do: reach the network.
+    </p>
+<pre><code>// src/lib/session.ts
+import "server-only";
+
+import { cookies } from "next/headers";
+import { notFound, redirect } from "next/navigation";
+
+import { db } from "@/lib/db";
+import { claims, type Tokens } from "@/lib/bastion";
+import { seal } from "@/lib/crypto";
+
+export async function createSession(email: string, tokens: Tokens) {
+  const { sub, role, exp } = claims(tokens.access_token);
+  const id = crypto.randomUUID();
+
+  db.prepare(
+    `INSERT INTO session (id, user_id, email, role, access_token, refresh_token,
+                          expires_at, generation, locked_until, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`,
+  ).run(
+    id, sub, email.trim().toLowerCase(), role,
+    seal(tokens.access_token), seal(tokens.refresh_token),
+    exp * 1000, Date.now(),
+  );
+
+  return id;
+}
+
+export async function getSession() {
+  const id = (await cookies()).get("session")?.value;
+  if (!id) return null;
+  return db.prepare("SELECT * FROM session WHERE id = ?").get(id) ?? null;
+}
+
+/** Redirects to sign-in, preserving where the user was headed. */
+export async function requireUser(returnTo = "/") {
+  const session = await getSession();
+  if (!session) redirect(`/sign-in?next=${encodeURIComponent(returnTo)}`);
+  return session;
+}
+
+/** 404 rather than 403 — a 403 confirms the route exists. */
+export async function requireAdmin() {
+  const session = await getSession();
+  if (session?.role !== "admin") notFound();
+  return session;
+}</code></pre>
+    <p>A page then costs one local read:</p>
+<pre><code>// src/app/account/page.tsx
+import { requireUser } from "@/lib/session";
+
+export default async function AccountPage() {
+  const session = await requireUser("/account");
+  return &lt;p&gt;Signed in as {session.email}&lt;/p&gt;;
+}</code></pre>
+
+    <h3>When you do need a live token</h3>
+    <p>
+      Changing a password is the usual case. Fetch a token, retry once if this
+      server rejects one you believed was valid — a clock skew, or a revocation
+      that landed between your expiry check and the call.
+    </p>
+<pre><code>// src/app/account/password/actions.ts
+"use server";
+
+import { apiFetch } from "@/lib/bastion";
+import { getAccessToken } from "@/lib/tokens";
+import { requireUser } from "@/lib/session";
+
+export async function changePassword(_state: unknown, form: FormData) {
+  const session = await requireUser("/account/password");
+
+  const res = await apiFetch("/auth/password", await getAccessToken(session.id), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      current_password: String(form.get("currentPassword")),
+      new_password: String(form.get("newPassword")),
+    }),
+  });
+
+  if (res.status === 401) return { error: "That current password is wrong." };
+  if (!res.ok) return { error: "Could not change the password." };
+
+  // 204. Every session on the account is now revoked, including this one —
+  // sign back in with the new password and replace the stored tokens, or send
+  // the user to the sign-in page. Doing nothing leaves them on a dead session.
+  return { ok: true };
+}</code></pre>
+    <div class="note">
+      <strong>A 401 here is ambiguous.</strong> This server answers 401 both for
+      a wrong <em>current password</em> and for a token it will not accept — so a
+      blanket "401 means refresh and retry" rule spends a rotation every time
+      somebody mistypes. Treat <code>/auth/password</code> as a route where 401
+      means the password, not the token.
+    </div>
+
     <h3>Refreshing — the part that bites</h3>
     <p>
       Refresh tokens are single-use, and <em>losing</em> the rotation race
@@ -585,21 +731,63 @@ function claims(accessToken: string) {
       dev</code> compiles route handlers in separate workers, and production runs
       more than one instance.
     </p>
-    <p>Serialise it in the database instead, with a compare-and-swap:</p>
-<pre><code>-- Winner is whoever changes exactly one row.
-UPDATE session
-   SET locked_until = :now + 15000
- WHERE id = :sessionId
-   AND generation = :observedGeneration
-   AND (locked_until IS NULL OR locked_until &lt; :now);</code></pre>
-<pre><code>const won = db.run(LEASE_SQL, { ... }).changes === 1;
-if (!won) return awaitTheWinnersResult();   // poll until generation moves
+    <p>
+      Serialise it in the database instead. The lease is a compare-and-swap on
+      <code>generation</code>: the winner is whoever changes exactly one row.
+    </p>
+<pre><code>// src/lib/tokens.ts
+import "server-only";
 
-const rotated = await refresh(current.refresh_token);
-db.run(`UPDATE session
-           SET access_token = ?, refresh_token = ?, generation = generation + 1,
-               locked_until = NULL
-         WHERE id = ? AND generation = ?`, [...]);</code></pre>
+import { refresh } from "@/lib/bastion";
+import { db } from "@/lib/db";
+import { open, seal } from "@/lib/crypto";
+
+const LEASE_MS = 15_000;
+const SKEW_MS = 30_000;   // refresh this far ahead of expiry
+
+export async function getAccessToken(sessionId: string): Promise&lt;string&gt; {
+  const row = db.prepare("SELECT * FROM session WHERE id = ?").get(sessionId);
+  if (!row) throw new Error("no session");
+
+  if (row.expires_at - SKEW_MS &gt; Date.now()) return open(row.access_token);
+
+  const now = Date.now();
+  const won = db.prepare(
+    `UPDATE session SET locked_until = ?
+      WHERE id = ? AND generation = ?
+        AND (locked_until IS NULL OR locked_until &lt; ?)`,
+  ).run(now + LEASE_MS, sessionId, row.generation, now).changes === 1;
+
+  // Someone else is already refreshing. Poll until they bump the generation,
+  // bounded by the lease so a crashed holder cannot block anyone forever.
+  if (!won) return awaitRotation(sessionId, row.generation);
+
+  try {
+    const rotated = await refresh(open(row.refresh_token));
+
+    db.prepare(
+      `UPDATE session
+          SET access_token = ?, refresh_token = ?, expires_at = ?,
+              generation = generation + 1, locked_until = NULL
+        WHERE id = ? AND generation = ?`,
+    ).run(
+      seal(rotated.access_token), seal(rotated.refresh_token),
+      Date.now() + rotated.expires_in * 1000, sessionId, row.generation,
+    );
+
+    return rotated.access_token;
+  } catch (error) {
+    // 429: the limiter rejected it before the handler, so the token is
+    // unspent — release and let the next caller try.
+    // Anything else: the outcome is unknown. Do NOT retry.
+    if (isRateLimited(error)) {
+      db.prepare("UPDATE session SET locked_until = NULL WHERE id = ?").run(sessionId);
+    } else {
+      db.prepare("DELETE FROM session WHERE id = ?").run(sessionId);
+    }
+    throw error;
+  }
+}</code></pre>
     <p>
       Handle the two failure modes differently, because they are not the same
       failure. A <strong>429</strong> is rejected by the rate limiter before the
@@ -616,6 +804,37 @@ db.run(`UPDATE session
       row would rotate each other's token away — which reads as replay here and
       revokes the family. One row per session gives each device its own.
     </div>
+
+    <h3>Signing out</h3>
+    <p>
+      Revoke the family here as well as dropping your own row, or the refresh
+      token stays usable until it expires on its own.
+    </p>
+<pre><code>// src/app/actions.ts
+"use server";
+
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
+import { logout } from "@/lib/bastion";
+import { db } from "@/lib/db";
+import { open } from "@/lib/crypto";
+
+export async function signOut() {
+  const jar = await cookies();
+  const id = jar.get("session")?.value;
+
+  if (id) {
+    const row = db.prepare("SELECT refresh_token FROM session WHERE id = ?").get(id);
+    // Best effort: a failed revocation must not block signing out. The family
+    // expires on its own; dropping the local row matters more right now.
+    if (row) await logout(open(row.refresh_token)).catch(() =&gt; {});
+    db.prepare("DELETE FROM session WHERE id = ?").run(id);
+  }
+
+  jar.delete("session");
+  redirect("/");
+}</code></pre>
 
     <h3>Next 16 specifics</h3>
     <ul>
@@ -642,20 +861,24 @@ db.run(`UPDATE session
       </li>
     </ul>
 
-    <h3>A complete one</h3>
+    <h3>That is the whole integration</h3>
     <p>
-      <code>examples/ecommerce</code> in the repository is a working storefront
-      on Next 16, BetterAuth and Drizzle, with this server as the credential
-      authority. Its <code>src/lib/bastion/</code> directory is the above done
-      properly — sealed tokens at rest, the refresh lease, a client-side token
-      bucket, and a BetterAuth plugin exposing
-      <code>/sign-in/bastion</code> and <code>/sign-up/bastion</code>. Copy the
-      directory, set the environment, done.
+      Nothing above needs an authentication library. Six files — a client, a
+      crypto helper, a session module, a token module holding the lease, and two
+      server actions — and this server is your credential authority.
+    </p>
+    <p>
+      <code>examples/ecommerce</code> in the repository is a runnable Next 16 app
+      built this way, if you would rather read it working than assemble it:
     </p>
 <pre><code>cd examples/ecommerce
 pnpm install
 cp .env.example .env.local   # fill in the two secrets
 pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
+    <p>
+      Wiring this into a session library instead of hand-rolling
+      <code>session.ts</code> is a separate concern, and gets its own guide.
+    </p>
   </div>
 </section>
 
