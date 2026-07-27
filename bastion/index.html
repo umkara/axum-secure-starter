@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bastion — docs for axum-secure-starter</title>
-<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, and CSS frameworks.">
+<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, BetterAuth, and CSS frameworks.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
@@ -26,6 +26,7 @@
       <a href="#serving">Serving a frontend</a>
       <a href="#client">The API client</a>
       <a href="#frameworks">JS &amp; TS frameworks</a>
+      <a href="#betterauth">BetterAuth plugin</a>
       <a href="#css">CSS frameworks</a>
     </div>
     <div class="nav-group">
@@ -879,9 +880,441 @@ cp .env.example .env.local   # fill in the two secrets
 pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
     <p>
       Wiring this into a session library instead of hand-rolling
-      <code>session.ts</code> is a separate concern, and gets its own guide.
+      <code>session.ts</code> is a separate concern, and gets its own guide:
+      <a href="#betterauth">BetterAuth plugin</a>.
     </p>
   </div>
+</section>
+
+<section id="betterauth">
+  <h2>BetterAuth plugin</h2>
+  <p>
+    The <a href="#frameworks">Next.js tab</a> hand-rolls its session in six
+    files and needs no library. This is the other answer: keep
+    <strong>BetterAuth</strong> for the browser session — its cookie, its CSRF,
+    its route handler, its React hooks — and make this server the credential
+    authority behind it. Nothing about the split changes. Bastion tokens still
+    never reach the browser; the plugin is only the seam between the two.
+  </p>
+<pre><code>Browser ──BetterAuth cookie──&gt; Next (Node) ──Bearer token──&gt; this server
+                                   │
+                                   └── bastionCredential: sealed token pair</code></pre>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Concern</th><th>Owner</th></tr></thead>
+    <tbody>
+      <tr><td>Passwords, account records, refresh-token rotation</td><td>This server</td></tr>
+      <tr><td>Session cookie, CSRF, <code>/api/auth/*</code> handler, client hooks</td><td>BetterAuth</td></tr>
+      <tr><td>Everything else</td><td>You</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    A working copy is <code>examples/nextjs/src/lib/bastion/</code> in the
+    repository — thirteen files, one dependency beyond BetterAuth itself
+    (<code>zod</code>), and exactly one line that knows where your database is.
+    Copy the directory; the rest of this section is what is in it and why.
+  </p>
+
+  <h3>Install</h3>
+<pre><code>pnpm add better-auth zod</code></pre>
+  <p>
+    On pnpm 10, <code>better-sqlite3</code> also needs its postinstall
+    unblocked, or the native binding is never compiled — and pin it to 12,
+    because BetterAuth peer-requires <code>^12</code>:
+  </p>
+<pre><code>// package.json
+"pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }</code></pre>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Variable</th><th>Default</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>BASTION_URL</code></td><td><code>http://127.0.0.1:8080</code></td><td>No trailing slash</td></tr>
+      <tr><td><code>BASTION_API_PREFIX</code></td><td><code>/api/v1</code></td><td></td></tr>
+      <tr><td><code>BASTION_TOKEN_SECRET</code></td><td><em>required</em></td><td>32 bytes base64; seals tokens at rest</td></tr>
+      <tr><td><code>BASTION_TIMEOUT_MS</code></td><td><code>8000</code></td><td></td></tr>
+      <tr><td><code>BASTION_REFRESH_SKEW_SECONDS</code></td><td><code>30</code></td><td>Raise it to force a refresh on every call while testing</td></tr>
+      <tr><td><code>BASTION_REFRESH_LEASE_MS</code></td><td><code>15000</code></td><td>How long one refresh may hold the lock</td></tr>
+      <tr><td><code>BASTION_FORWARD_CLIENT_IP</code></td><td><code>false</code></td><td>See <em>Rate limits</em> below</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    Parse that at module load and throw on anything invalid. A missing token
+    secret should stop the process at boot, not surface as a decrypt failure on
+    somebody's first sign-in three hours later.
+  </p>
+
+  <h3>The config, and the one setting that must stay off</h3>
+<pre><code>// src/lib/auth.ts
+import { betterAuth } from "better-auth";
+import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { nextCookies } from "better-auth/next-js";
+
+import { db, schema } from "@/db";
+import { bastion } from "@/lib/bastion";
+
+export const auth = betterAuth({
+  database: drizzleAdapter(db, { provider: "sqlite", schema }),
+  secret: process.env.BETTER_AUTH_SECRET,
+
+  emailAndPassword: { enabled: false },
+
+  user: {
+    additionalFields: {
+      bastionUserId: { type: "string", required: false, input: false },
+      role: { type: "string", required: false, input: false, defaultValue: "user" },
+    },
+  },
+
+  // nextCookies() must be last — it wraps the response so Set-Cookie survives
+  // Next's server-action boundary.
+  plugins: [bastion(), nextCookies()],
+});</code></pre>
+  <div class="note">
+    <strong><code>emailAndPassword</code> must stay disabled.</strong> Leaving
+    it on mounts <code>/sign-up/email</code>, <code>/forget-password</code> and
+    <code>/reset-password</code>, which write password hashes into BetterAuth's
+    own <code>account</code> table. This server would know nothing about them,
+    and a user who reset their password there would find it unchanged
+    everywhere else. Passwords get one owner.
+  </div>
+  <p>
+    <code>input: false</code> on both added fields is not decoration either.
+    Without it BetterAuth accepts them from a request body, and a browser can
+    hand itself <code>role: "admin"</code> or point its local user at somebody
+    else's account here. They are only ever written server-side, from claims.
+  </p>
+
+  <h3>What the plugin adds</h3>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Route</th><th>Body</th><th>Calls out</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/auth/sign-in/bastion</code></td><td><code>{email, password}</code></td><td>1</td></tr>
+      <tr><td><code>POST /api/auth/sign-up/bastion</code></td><td><code>{email, password}</code></td><td>2 — register returns no tokens, so a login follows</td></tr>
+      <tr><td><code>POST /api/auth/change-password/bastion</code></td><td><code>{currentPassword, newPassword}</code></td><td>2 — see below</td></tr>
+      <tr><td><code>POST /api/auth/sign-out</code></td><td>—</td><td>1, from a <code>before</code> hook</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    Sign-in is the shape all of them share: authenticate here, mirror the
+    identity into BetterAuth's <code>user</code> table, mint a BetterAuth
+    session, stash the token pair against that session id.
+  </p>
+<pre><code>// src/lib/bastion/plugin.ts
+import type { BetterAuthPlugin } from "better-auth";
+import { APIError, createAuthEndpoint } from "better-auth/api";
+import { setSessionCookie } from "better-auth/cookies";
+import * as z from "zod";
+
+export const bastion = () =&gt;
+  ({
+    id: "bastion",
+    schema: bastionSchema,
+
+    endpoints: {
+      signInBastion: createAuthEndpoint(
+        "/sign-in/bastion",
+        { method: "POST", body: z.object({ email: z.string(), password: z.string() }) },
+        async (ctx) =&gt; {
+          const email = ctx.body.email.trim().toLowerCase();
+
+          try {
+            const issued = await api.login({ email, password: ctx.body.password });
+            const claims = decodeAccessTokenClaimsUnverified(issued.access_token);
+
+            const user = await upsertUser(ctx, {
+              bastionUserId: claims.sub, email, role: claims.role,
+            });
+
+            const session = await ctx.context.internalAdapter.createSession(user.id);
+            tokens.persist({ sessionId: session.id, bastionUserId: claims.sub, tokens: issued });
+
+            await setSessionCookie(ctx, { session, user });
+            return ctx.json({ token: session.token, user });
+          } catch (error) {
+            return toApiError(error);   // maps 401/422/429 onto APIError
+          }
+        },
+      ),
+    },
+  }) satisfies BetterAuthPlugin;</code></pre>
+  <p>
+    Two details in there are this server's, not BetterAuth's. The email is
+    normalised <code>trim().toLowerCase()</code> because that is what happens
+    here before both lookup and insert — skip it and one account here becomes
+    two local users. And the email comes from the <em>form</em>, not the token:
+    the access token carries <code>sub</code>, <code>role</code>,
+    <code>exp</code>, <code>iat</code>, <code>jti</code> and no email claim,
+    and there is no <code>/me</code> to ask.
+  </p>
+  <p>
+    <code>upsertUser</code> looks the local user up through the
+    <code>account</code> table on the uuid rather than matching on email — email
+    is mutable in principle, the uuid is not — and rewrites <code>role</code> on
+    every sign-in, so a promotion here takes effect at the user's next login
+    with no sync job anywhere.
+  </p>
+  <p>Sign-out needs no endpoint of its own, just a hook that runs first:</p>
+<pre><code>hooks: {
+  before: [{
+    // Before, not after: once BetterAuth drops the session row there is no
+    // way back to the credential.
+    matcher: (context) =&gt; context.path === "/sign-out",
+    handler: createAuthMiddleware(async (ctx) =&gt; {
+      const current = await getSessionFromCtx(ctx);
+      if (current?.session) await tokens.revoke(current.session.id);
+    }),
+  }],
+}</code></pre>
+
+  <h3>One credential row per session, not per user</h3>
+  <p>
+    BetterAuth's <code>account</code> table is the obvious home and the wrong
+    one: it is keyed by (user, provider), and this server mints a separate
+    refresh-token family per login. Two devices sharing a row would rotate each
+    other's token away, which reads as replay here and revokes the family.
+  </p>
+<pre><code>// src/lib/bastion/schema.ts
+export const bastionSchema = {
+  user: {
+    fields: {
+      bastionUserId: { type: "string", required: false, input: false },
+      role: { type: "string", required: false, input: false, defaultValue: "user" },
+    },
+  },
+  bastionCredential: {
+    fields: {
+      sessionId: {
+        type: "string", required: true, unique: true,
+        references: { model: "session", field: "id", onDelete: "cascade" },
+      },
+      bastionUserId: { type: "string", required: true },
+      accessToken:  { type: "string", required: true },   // AES-256-GCM sealed
+      refreshToken: { type: "string", required: true },   // AES-256-GCM sealed
+      accessTokenExpiresAt: { type: "date", required: true },
+      generation:  { type: "number", required: true, defaultValue: 0 },
+      lockedUntil: { type: "date", required: false },
+      status: { type: "string", required: true, defaultValue: "active" },
+      createdAt: { type: "date", required: true },
+      updatedAt: { type: "date", required: true },
+    },
+  },
+} satisfies PluginDBSchema;</code></pre>
+<pre><code>pnpm dlx @better-auth/cli generate</code></pre>
+  <p>
+    Seal both token columns yourself. BetterAuth's
+    <code>encryptOAuthTokens</code> only covers its <code>account</code> table,
+    so a refresh token sitting here in plaintext is a standing account takeover
+    for anyone who gets a copy of the file.
+  </p>
+  <div class="note">
+    <strong>Reach the schema type through <code>BetterAuthPlugin</code>.</strong>
+    <code>PluginDBSchema</code> above is
+    <code>NonNullable&lt;BetterAuthPlugin["schema"]&gt;</code>, not an import
+    from <code>@better-auth/core/db</code> where it actually lives. That package
+    is a transitive dependency, and pnpm or Yarn PnP will not resolve it from
+    your app — which would cost the directory its one virtue, being
+    copy-pasteable.
+  </div>
+
+  <h3>The client half</h3>
+  <p>
+    Types only. Bastion tokens never reach the browser, so there is nothing for
+    a client plugin to do at runtime — it exists so
+    <code>authClient.signIn.bastion(…)</code> type-checks.
+  </p>
+<pre><code>// src/lib/bastion/client.ts
+import type { BetterAuthClientPlugin } from "better-auth";
+import type { bastion } from "./plugin";
+
+export const bastionClient = () =&gt;
+  ({ id: "bastion", $InferServerPlugin: {} as ReturnType&lt;typeof bastion&gt; })
+    satisfies BetterAuthClientPlugin;</code></pre>
+<pre><code>// src/lib/auth-client.ts
+"use client";
+import { createAuthClient } from "better-auth/react";
+import { bastionClient } from "./bastion/client";
+
+export const authClient = createAuthClient({ plugins: [bastionClient()] });
+export const { useSession, signOut } = authClient;</code></pre>
+
+  <h3>Calling it from a server action</h3>
+  <p>
+    Going through <code>auth.api.*</code> rather than the client keeps sign-in
+    to one round trip, which matters if anything else has to happen in the same
+    request — merging a guest cart, say.
+  </p>
+<pre><code>// src/app/(auth)/actions.ts
+"use server";
+
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { APIError } from "better-auth/api";
+
+import { auth } from "@/lib/auth";
+
+export async function signInAction(_state: FormState, form: FormData) {
+  let userId: string;
+
+  try {
+    const result = await auth.api.signInBastion({
+      body: { email: String(form.get("email")), password: String(form.get("password")) },
+      headers: await headers(),
+      asResponse: false,
+    });
+    userId = result.user.id;   // NOT getSession() — see below
+  } catch (error) {
+    return { error: error instanceof APIError ? error.message : "Something went wrong." };
+  }
+
+  await mergeGuestCart(userId);
+  redirect("/products");
+}</code></pre>
+  <div class="note">
+    <strong>The session cookie is not readable in the action that creates it.</strong>
+    <code>setSessionCookie</code> writes to the <em>response</em>; the request
+    headers this action was called with still describe an anonymous visitor, so
+    a following <code>auth.api.getSession()</code> reports nobody and any work
+    keyed on the user silently does nothing. Take the id from the endpoint's
+    return value. Also leave <code>requireRequest</code> off your endpoints —
+    it makes <code>auth.api.*</code> callers pass a <code>request</code>, which
+    server actions do not have.
+  </div>
+
+  <h3>Using a token in your own code</h3>
+  <p>
+    <code>withAccessToken</code> refreshes if the token is close to expiry and
+    retries once on an unexpected 401 — a clock skew, or a revocation that
+    landed between the expiry check and the call.
+  </p>
+<pre><code>import { withAccessToken, CredentialRevoked } from "@/lib/bastion";
+
+try {
+  await withAccessToken(session.id, (token) =&gt;
+    fetch(`${base}/api/v1/notes`, { headers: { authorization: `Bearer ${token}` } }),
+  );
+} catch (error) {
+  if (error instanceof CredentialRevoked) {
+    // sign the user out; this is not a 500
+  }
+}</code></pre>
+  <p>
+    Turn the retry off where a 401 is not about the token.
+    <code>/auth/password</code> is the case: a wrong <em>current password</em>
+    answers 401 exactly like a stale token does, so the default rule spends a
+    rotation to rediscover the same 401.
+  </p>
+<pre><code>await withAccessToken(session.id, (token) =&gt; api.changePassword(token, { … }),
+  { retryOnUnauthorized: false });</code></pre>
+  <p>
+    That endpoint then has a second consequence: a successful password change
+    revokes every session on the account here, including the one that made the
+    call. The plugin logs back in with the new password and swaps the stored
+    credential in place, so the BetterAuth session survives against a new
+    token family. Doing nothing would leave the user holding a dead session.
+  </p>
+  <div class="note">
+    <strong>Refresh is lazy, and that is load-bearing.</strong> The BetterAuth
+    session already carries <code>bastionUserId</code>, <code>email</code> and
+    <code>role</code>, so rendering a page needs no call to this server at all —
+    only auth <em>transitions</em> and the odd privileged action go out. Every
+    request from your app arrives from one IP and shares one rate-limit bucket;
+    a proactive background refresh would multiply that traffic by your user
+    count. Keep your session module structurally unable to reach the network.
+  </div>
+
+  <h3>The refresh lease</h3>
+  <p>
+    Same problem as the hand-rolled version, same solution, and worth repeating
+    because it is the one part you cannot simplify away. Refresh tokens are
+    single-use and <em>losing</em> the rotation race revokes the whole family,
+    so two concurrent refreshes sign the user out everywhere. A promise map in
+    module scope does not fix it: <code>next dev</code> compiles route handlers
+    in separate workers and production runs more than one instance.
+  </p>
+  <p>
+    The lock is a compare-and-swap on <code>generation</code>. The winner is
+    whoever changes exactly one row.
+  </p>
+<pre><code>// src/lib/bastion/store.ts
+export function acquireLease(input: {
+  sessionId: string; observedGeneration: number; leaseMs: number;
+}): boolean {
+  const now = Date.now();
+  const result = sqlite.prepare(
+    `UPDATE "bastionCredential"
+        SET lockedUntil = ?, updatedAt = ?
+      WHERE sessionId = ?
+        AND generation = ?
+        AND status = 'active'
+        AND (lockedUntil IS NULL OR lockedUntil &lt; ?)`,
+  ).run(now + input.leaseMs, now, input.sessionId, input.observedGeneration, now);
+
+  return result.changes === 1;
+}</code></pre>
+  <p>
+    A loser polls until the generation moves, bounded by the lease so a crashed
+    holder cannot block anyone forever. Committing a rotation bumps
+    <code>generation</code>, which releases the lease and invalidates every
+    other holder's compare-and-swap in the same statement. The in-process
+    promise map on top of this is an optimisation — delete it and you are
+    slower but still correct; delete the lease and you are neither.
+  </p>
+  <p>Failures split three ways, and collapsing them is how sessions die:</p>
+  <div class="scroll-x">
+  <table>
+    <thead><tr><th>Outcome</th><th>Token</th><th>Do</th></tr></thead>
+    <tbody>
+      <tr><td><strong>429</strong></td><td>Unspent — the limiter rejected it before the handler</td><td>Release the lease, let the next caller try</td></tr>
+      <tr><td><strong>401</strong></td><td>Definitively dead — replayed, logged out, password changed</td><td>Mark <code>revoked</code>, sign the user out</td></tr>
+      <tr><td><strong>Timeout / 5xx</strong></td><td>Unknown — may have been consumed with the response lost</td><td>Mark <code>poisoned</code>, never retry</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>
+    <code>poisoned</code> costs one session. Retrying a token that was in fact
+    consumed looks like replay and costs every session in the family, which is
+    the trade that rule exists to make.
+  </p>
+
+  <h3>Rate limits</h3>
+  <p>
+    The <code>/auth/*</code> bucket here defaults to 5/s, burst 5, and your
+    whole app shares it. Pace your own calls just under that — 4/s — so your
+    client-side bucket empties first and a burst becomes a short wait instead of
+    a 429. For per-end-user buckets set
+    <code>BASTION_FORWARD_CLIENT_IP=true</code>, but only when this server runs
+    behind a proxy you control with <code>APP_TRUST_PROXY_HEADERS=true</code>;
+    otherwise the header is either ignored or spoofable.
+  </p>
+
+  <h3>Copying it</h3>
+  <p>
+    Take <code>examples/nextjs/src/lib/bastion/</code> whole. Three edits and it
+    runs:
+  </p>
+  <ul>
+    <li>
+      <code>store.ts</code> — <code>import { sqlite } from "@/db"</code> is the
+      only line that knows where your database lives.
+    </li>
+    <li>
+      Your BetterAuth config — add <code>bastion()</code> and turn
+      <code>emailAndPassword</code> off.
+    </li>
+    <li>Your auth client — add <code>bastionClient()</code>.</li>
+  </ul>
+  <p>
+    Then <code>pnpm dlx @better-auth/cli generate</code> for the tables. The
+    example runs against Next 16.2 and better-auth 1.6.25:
+  </p>
+<pre><code>cd examples/nextjs
+pnpm install
+cp .env.example .env.local   # fill in the two secrets
+pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
 </section>
 
 <section id="css">
