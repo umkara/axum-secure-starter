@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Next.js on Bastion">
+  <title>Next.js on Bastion</title>
+  <!-- Same mark as the docs site, so the example reads as part of the project.
+       Chunky shapes only: this has to survive being drawn 16px wide in a tab. -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#g)"/>
+  <path d="M16 4.8l9 2.9v6.9c0 5.8-3.9 9.8-9 11.8-5.1-2-9-6-9-11.8V7.7z" fill="#fff"/>
+  <path d="M11.6 15.6l3.3 3.3 5.7-6.4" fill="none" stroke="#047857" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

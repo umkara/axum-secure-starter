@@ -1,12 +1,16 @@
 import Link from "next/link";
 
+import { Logo } from "./logo";
+
 export default function HomePage() {
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="text-4xl font-semibold tracking-tight">Bastion Provisions</h1>
+      <Logo size={44} />
+      <h1 className="mt-5 text-4xl font-semibold tracking-tight">Next.js on Bastion</h1>
       <p className="mt-4 text-lg text-bark-700">
-        A small storefront that keeps its catalogue, carts and orders in SQLite — and hands every
-        question about <em>who you are</em> to Bastion.
+        A Next.js 16 app that keeps its own data in SQLite and hands every question about{" "}
+        <em>who you are</em> to Bastion. The shop below is only here to give that something to
+        protect.
       </p>
 
       <dl className="mt-10 space-y-5 text-sm">

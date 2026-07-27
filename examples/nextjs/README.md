@@ -1,13 +1,32 @@
-# Bastion Provisions — a Next.js storefront on Bastion
+# Next.js on Bastion
 
-A small ecommerce app where **Bastion is the credential authority** and
-everything commerce-shaped — catalogue, carts, orders — lives locally in
-SQLite. The integration is packaged as a drop-in directory,
-[`src/lib/bastion/`](src/lib/bastion/README.md), which is as much the point of
-this example as the shop is.
+A Next.js 16 app where **Bastion is the credential authority** and the app's own
+data lives locally in SQLite. The shop it happens to render — catalogue, cart,
+orders — is only there to give the integration something to protect; the
+integration itself is the point.
+
+It is built as bricks rather than a monolith. Each file in
+[`src/lib/bastion/`](src/lib/bastion/README.md) does one job and knows nothing
+about the shop, so you can take the whole directory, or take three files and
+leave the rest:
+
+| Brick | What it alone is responsible for |
+|---|---|
+| `config.ts` | Environment, parsed once, fails at boot |
+| `http.ts` | The one place that speaks HTTP to Bastion |
+| `errors.ts` | A type per thing a caller can do about a failure |
+| `throttle.ts` | Staying under Bastion's rate limit |
+| `api.ts` | The five endpoints, typed, no policy |
+| `claims.ts` | Reading `sub` / `role` / `exp` out of a token |
+| `crypto.ts` | Sealing tokens at rest |
+| `schema.ts` + `store.ts` | The credential row and its lease |
+| `tokens.ts` | `getAccessToken` and the single-flight refresh |
+| `plugin.ts` + `client.ts` | Snapping the above onto a session library |
+
+Only the last row knows a session library exists. Swap it and the other eleven
+files are unchanged.
 
 - Next.js 16 (App Router, server actions) · Tailwind 4 · Drizzle + better-sqlite3
-- BetterAuth for the browser session, extended by a custom server plugin
 - Bastion for accounts, passwords and refresh-token rotation
 
 ## Run it
@@ -27,10 +46,10 @@ cargo run
 `APP_CORS_ALLOWED_ORIGINS` can stay empty — every call to Bastion is
 server-to-server, so CORS never enters the picture.
 
-Then the shop:
+Then the app:
 
 ```bash
-cd examples/ecommerce && pnpm install && cp .env.example .env.local
+cd examples/nextjs && pnpm install && cp .env.example .env.local
 ```
 
 Fill in the two secrets in `.env.local`:

@@ -4,12 +4,13 @@ import Link from "next/link";
 import { readCart } from "@/lib/cart";
 import { getCurrentUser } from "@/lib/session";
 
+import { Logo } from "./logo";
 import { SignOutButton } from "./sign-out-button";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Bastion Provisions",
-  description: "A Next.js storefront that delegates identity to Bastion.",
+  title: "Next.js on Bastion",
+  description: "A Next.js app that delegates identity to Bastion.",
 };
 
 /**
@@ -26,8 +27,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="min-h-screen">
         <header className="border-b border-bark-200 bg-white">
           <nav className="mx-auto flex max-w-5xl items-center gap-6 px-6 py-4">
-            <Link href="/" className="text-lg font-semibold tracking-tight">
-              Bastion Provisions
+            <Link href="/" className="flex items-center gap-2.5 text-lg font-semibold tracking-tight">
+              <Logo />
+              Next.js on Bastion
             </Link>
             <Link href="/products" className="text-sm hover:underline">
               Shop

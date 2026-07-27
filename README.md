@@ -478,12 +478,15 @@ every push, plus the advisory scan weekly.
 
 ## Examples
 
-**[`examples/ecommerce`](examples/ecommerce)** — a Next.js 16 storefront that
-uses this server as its credential authority. Catalogue, carts and orders live
-in the app's own SQLite database; accounts, passwords and refresh-token rotation
-stay here. The integration is packaged as a copy-pasteable
-[`src/lib/bastion/`](examples/ecommerce/src/lib/bastion/README.md) directory that
-plugs into BetterAuth, so it can be lifted into any Next app.
+**[`examples/nextjs`](examples/nextjs)** — a Next.js 16 app that uses this server
+as its credential authority. The app's own data lives in its own SQLite
+database; accounts, passwords and refresh-token rotation stay here.
+
+The integration is a set of bricks rather than a framework:
+[`src/lib/bastion/`](examples/nextjs/src/lib/bastion/README.md) is twelve files
+that each do one job — the HTTP client, the rate-limit bucket, the token
+sealing, the refresh lease — and only the last two know a session library
+exists. Take the directory, or take the three files you need.
 
 It is worth reading even if you do not use Next: it works through the three
 constraints this server imposes on a browser-facing client — a page CSP with no

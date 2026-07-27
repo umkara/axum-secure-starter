@@ -35,7 +35,7 @@ jobs:
       - name: Test
         run: cargo test --all-features
 
-  example-ecommerce:
+  example-nextjs:
     name: Example builds
     runs-on: ubuntu-latest
     # The example is a separate toolchain that nothing else in CI would catch
@@ -52,18 +52,18 @@ jobs:
         with:
           node-version: "22"
           cache: pnpm
-          cache-dependency-path: examples/ecommerce/pnpm-lock.yaml
+          cache-dependency-path: examples/nextjs/pnpm-lock.yaml
 
       - name: Install
-        working-directory: examples/ecommerce
+        working-directory: examples/nextjs
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        working-directory: examples/ecommerce
+        working-directory: examples/nextjs
         run: pnpm typecheck
 
       - name: Build
-        working-directory: examples/ecommerce
+        working-directory: examples/nextjs
         # Config is parsed at module load and throws when a secret is missing,
         # so the build needs values — any valid ones.
         env:

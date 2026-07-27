@@ -466,8 +466,8 @@ export async function signIn(email: string, password: string) {
 
     <h3>Scaffold</h3>
     <p>Written against <strong>Next 16</strong>, App Router, server actions.</p>
-<pre><code>pnpm create next-app@latest storefront --ts --app --src-dir --tailwind
-cd storefront</code></pre>
+<pre><code>pnpm create next-app@latest my-app --ts --app --src-dir --tailwind
+cd my-app</code></pre>
 <pre><code># .env.local
 BASTION_URL=http://127.0.0.1:8443
 SESSION_SECRET=$(openssl rand -base64 32)</code></pre>
@@ -868,10 +868,12 @@ export async function signOut() {
       server actions — and this server is your credential authority.
     </p>
     <p>
-      <code>examples/ecommerce</code> in the repository is a runnable Next 16 app
-      built this way, if you would rather read it working than assemble it:
+      They are bricks, not a framework. Each one does a single job and none of
+      them knows what your app is for, so you can take all six or take the three
+      you are missing. <code>examples/nextjs</code> in the repository is the same
+      set assembled and running, if you would rather read it working:
     </p>
-<pre><code>cd examples/ecommerce
+<pre><code>cd examples/nextjs
 pnpm install
 cp .env.example .env.local   # fill in the two secrets
 pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
