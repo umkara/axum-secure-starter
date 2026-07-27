@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bastion — docs for axum-secure-starter</title>
-<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, and CSS frameworks.">
+<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, and CSS frameworks.">
 <link rel="stylesheet" href="style.css">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 </head>
@@ -55,7 +55,7 @@
   <p>
     This site covers running it, what it costs at load, and wiring a frontend to
     it in whatever you already use: vanilla JavaScript, TypeScript, React, Vue,
-    Svelte, Tailwind, or plain CSS.
+    Svelte, Next.js, Tailwind, or plain CSS.
   </p>
 </section>
 
@@ -447,36 +447,215 @@ export async function signIn(email: string, password: string) {
 
   <div class="panel" id="fw-next" hidden>
     <p>
-      The odd one out. Next.js does <em>not</em> go behind
-      <code>APP_STATIC_DIR</code> — a static export emits an inline bootstrap
+      The odd one out, and the only entry here that does <em>not</em> go behind
+      <code>APP_STATIC_DIR</code>. A static export emits an inline bootstrap
       script, and the page CSP is <code>script-src 'self'</code> with no
       <code>unsafe-inline</code>, so it would never hydrate. Next runs as its own
       Node process and calls this server from the server side.
     </p>
+<pre><code>Browser ──session cookie──&gt; Next (Node) ──Bearer token──&gt; this server
+                               │
+                               └── its own database: whatever your app owns</code></pre>
     <p>
-      That turns out to be the better shape anyway: tokens stay in Node, the
-      browser never holds a refresh token, and since the calls are
-      server-to-server, CORS never enters the picture — leave
+      That is the better arrangement anyway. Tokens never reach the browser, so
+      there is no refresh token in <code>localStorage</code> for an XSS to walk
+      off with, and because every call is server-to-server the browser never
+      issues a cross-origin request — leave
       <code>APP_CORS_ALLOWED_ORIGINS</code> empty.
     </p>
-<pre><code>Browser ──cookie──&gt; Next (Node) ──Bearer token──&gt; this server
-                       │
-                       └── its own database: catalogue, carts, orders</code></pre>
+
+    <h3>Scaffold</h3>
+    <p>Written against <strong>Next 16</strong>, App Router, server actions.</p>
+<pre><code>pnpm create next-app@latest storefront --ts --app --src-dir --tailwind
+cd storefront</code></pre>
+<pre><code># .env.local
+BASTION_URL=http://127.0.0.1:8443
+SESSION_SECRET=$(openssl rand -base64 32)</code></pre>
+
+    <h3>The client</h3>
     <p>
-      There is a complete worked example in the repository:
-      <code>examples/ecommerce</code>, a storefront on Next 16 + BetterAuth +
-      Drizzle where this server is the credential authority. Its
-      <code>src/lib/bastion/</code> directory is a drop-in BetterAuth plugin —
-      copy it, set the environment, done.
+      One module, marked <code>server-only</code> so an accidental import from a
+      client component fails the build rather than shipping your token handling
+      to the browser.
     </p>
+<pre><code>// src/lib/bastion.ts
+import "server-only";
+
+const BASE = `${process.env.BASTION_URL}/api/v1`;
+
+export interface Tokens {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+export async function login(email: string, password: string): Promise&lt;Tokens&gt; {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    cache: "no-store",
+  });
+
+  if (res.status === 401) throw new Error("invalid credentials");
+  if (!res.ok) throw new Error(`bastion: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function apiFetch(path: string, accessToken: string, init?: RequestInit) {
+  return fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...init?.headers, authorization: `Bearer ${accessToken}` },
+    cache: "no-store",
+  });
+}</code></pre>
     <p>
-      The part worth reading regardless of framework is how it handles refresh.
-      Refresh tokens here are single-use, and <em>losing</em> the rotation race
-      revokes the whole family — so two concurrent refreshes sign the user out
-      everywhere. The example serialises refresh through a database lease with a
-      compare-and-swap, rather than an in-process lock that would not survive a
-      second instance.
+      Normalising the email with <code>trim().toLowerCase()</code> matches what
+      this server does before it looks the account up. Skip it and
+      <code>&nbsp;Alice@example.com&nbsp;</code> becomes one account here and two
+      rows in your database.
     </p>
+
+    <h3>Signing in</h3>
+    <p>
+      A server action. The tokens go into <em>your</em> database keyed by a
+      session id; the cookie carries the id and nothing else.
+    </p>
+<pre><code>// src/app/sign-in/actions.ts
+"use server";
+
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { login } from "@/lib/bastion";
+import { createSession } from "@/lib/session";
+
+export async function signIn(_state: unknown, form: FormData) {
+  let tokens;
+  try {
+    tokens = await login(String(form.get("email")), String(form.get("password")));
+  } catch {
+    return { error: "Invalid email or password." };
+  }
+
+  const sessionId = await createSession(tokens);
+
+  (await cookies()).set("session", sessionId, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 7,
+  });
+
+  redirect("/");
+}</code></pre>
+
+    <h3>Knowing who the user is, without asking</h3>
+    <p>
+      There is no <code>/me</code> endpoint, and the access token carries no
+      email claim — it carries <code>sub</code> (the user's uuid),
+      <code>role</code>, and the usual timestamps. So read the claims once at
+      sign-in and store them on your session alongside the email the form
+      already gave you.
+    </p>
+<pre><code>// Decoding without verifying is safe *here* and nowhere else: this token
+// arrived over TLS as the direct response to our own login call. Never do
+// this to a token that came from a browser — that is what the signature
+// is for, and this server checks it on every protected route anyway.
+function claims(accessToken: string) {
+  const payload = Buffer.from(accessToken.split(".")[1], "base64url").toString();
+  return JSON.parse(payload) as { sub: string; role: "user" | "admin"; exp: number };
+}</code></pre>
+    <div class="note">
+      <strong>This is what makes the whole arrangement cheap.</strong> With the
+      user's id, email and role on your own session, rendering a page costs zero
+      calls to this server — one local read instead. Only the actions that
+      genuinely need a live token (changing a password, an admin revocation) ever
+      go out over the network. Fetching the session from here on every render
+      would put your whole app's traffic through one rate-limit bucket, because
+      it all arrives from one IP.
+    </div>
+
+    <h3>Refreshing — the part that bites</h3>
+    <p>
+      Refresh tokens are single-use, and <em>losing</em> the rotation race
+      revokes the entire family. Two concurrent refreshes therefore do not merely
+      waste a call — they sign the user out everywhere. An
+      <code>async</code> mutex in module scope will not save you: <code>next
+      dev</code> compiles route handlers in separate workers, and production runs
+      more than one instance.
+    </p>
+    <p>Serialise it in the database instead, with a compare-and-swap:</p>
+<pre><code>-- Winner is whoever changes exactly one row.
+UPDATE session
+   SET locked_until = :now + 15000
+ WHERE id = :sessionId
+   AND generation = :observedGeneration
+   AND (locked_until IS NULL OR locked_until &lt; :now);</code></pre>
+<pre><code>const won = db.run(LEASE_SQL, { ... }).changes === 1;
+if (!won) return awaitTheWinnersResult();   // poll until generation moves
+
+const rotated = await refresh(current.refresh_token);
+db.run(`UPDATE session
+           SET access_token = ?, refresh_token = ?, generation = generation + 1,
+               locked_until = NULL
+         WHERE id = ? AND generation = ?`, [...]);</code></pre>
+    <p>
+      Handle the two failure modes differently, because they are not the same
+      failure. A <strong>429</strong> is rejected by the rate limiter before the
+      handler runs, so the refresh token is unspent — release the lease and let
+      the next caller try. A <strong>timeout or 5xx is ambiguous</strong>: the
+      token may have been consumed with the response lost. Retrying it looks like
+      replay and takes down every session in the family, so mark that credential
+      dead and make the user sign in again. Losing one session beats losing all
+      of them.
+    </p>
+    <div class="note">
+      <strong>Store credentials per session, not per user.</strong> This server
+      mints a separate refresh-token family per login, so two devices sharing one
+      row would rotate each other's token away — which reads as replay here and
+      revokes the family. One row per session gives each device its own.
+    </div>
+
+    <h3>Next 16 specifics</h3>
+    <ul>
+      <li>
+        <code>cookies()</code>, <code>headers()</code>, <code>params</code> and
+        <code>searchParams</code> are all async — <code>await</code> them.
+      </li>
+      <li>
+        <code>middleware.ts</code> is now <code>proxy.ts</code>. Either name still
+        works, but do not put the authorization check there: treat it as a
+        redirect for tidiness and gate in the server component or action that
+        actually touches data.
+      </li>
+      <li>
+        Native modules need
+        <code>serverExternalPackages: ["better-sqlite3"]</code> in
+        <code>next.config.ts</code>, or the <code>.node</code> binding is lost to
+        the bundler.
+      </li>
+      <li>
+        A session cookie set by a server action lands on the <em>response</em>.
+        Reading the session again later in that same action still reports an
+        anonymous visitor — take what you need from the value you already have.
+      </li>
+    </ul>
+
+    <h3>A complete one</h3>
+    <p>
+      <code>examples/ecommerce</code> in the repository is a working storefront
+      on Next 16, BetterAuth and Drizzle, with this server as the credential
+      authority. Its <code>src/lib/bastion/</code> directory is the above done
+      properly — sealed tokens at rest, the refresh lease, a client-side token
+      bucket, and a BetterAuth plugin exposing
+      <code>/sign-in/bastion</code> and <code>/sign-up/bastion</code>. Copy the
+      directory, set the environment, done.
+    </p>
+<pre><code>cd examples/ecommerce
+pnpm install
+cp .env.example .env.local   # fill in the two secrets
+pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
   </div>
 </section>
 
