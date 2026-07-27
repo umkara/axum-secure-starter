@@ -10,6 +10,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
+# What this tree expects to be deploying. Checked against what the service
+# reports once it is back up, which is the only way to notice that --skip-build
+# just shipped a stale dist/ binary.
+version="$(awk -F'"' '/^\[package\]/{p=1} p && /^version *=/{print $2; exit}' Cargo.toml)"
+[[ -n "$version" ]] || {
+  echo "deploy.sh: could not read the package version from Cargo.toml" >&2
+  exit 1
+}
+
 host=""
 env_file=""
 domain=""
@@ -82,7 +91,8 @@ tar -C "$staging" -czf "$staging/payload.tgz" payload
 scp "${ssh_args[@]+"${ssh_args[@]}"}" "$staging/payload.tgz" "$host:/tmp/axum-deploy.tgz"
 
 echo "==> installing"
-ssh "${ssh_args[@]+"${ssh_args[@]}"}" "$host" HAS_ENV="${env_file:+1}" bash -seu <<'REMOTE'
+ssh "${ssh_args[@]+"${ssh_args[@]}"}" "$host" \
+  HAS_ENV="${env_file:+1}" VERSION="$version" bash -seu <<'REMOTE'
 set -euo pipefail
 work="$(mktemp -d)"
 trap 'rm -rf "$work" /tmp/axum-deploy.tgz' EXIT
@@ -135,6 +145,36 @@ sudo systemctl is-active --quiet axum-secure-starter.service || {
   exit 1
 }
 sudo systemctl --no-pager --lines=0 status axum-secure-starter.service || true
+
+# The binary is built for this instance's architecture, so the deploying machine
+# cannot execute it to ask its version. Ask the running service instead: that
+# answers "is the new code actually serving?", which is the question, and covers
+# a restart that silently came back on the old executable.
+#
+# -k because the certificate is issued for the public hostname, not localhost.
+port="$(sudo sed -n 's/^APP_BIND_ADDR=.*:\([0-9]*\)$/\1/p' /etc/axum-secure-starter/env | tail -1)"
+port="${port:-443}"
+
+reported=""
+for _ in 1 2 3 4 5; do
+  reported="$(curl -k -fsS --max-time 5 "https://localhost:$port/health/live" 2>/dev/null |
+    sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+  [ -n "$reported" ] && break
+  sleep 1
+done
+
+if [ -z "$reported" ]; then
+  echo "the service is active but /health/live did not answer on port $port" >&2
+  exit 1
+fi
+
+if [ "$reported" != "$VERSION" ]; then
+  echo "version mismatch: the service reports $reported, this tree is $VERSION" >&2
+  echo "  dist/axum-secure-starter is stale; rebuild it (drop --skip-build)" >&2
+  exit 1
+fi
+
+echo "verified: serving $reported"
 REMOTE
 
 if [[ -n "$domain" ]]; then
