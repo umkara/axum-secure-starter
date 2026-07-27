@@ -350,8 +350,8 @@ APP_STATIC_DIR=./public cargo run</code></pre>
   </div>
 
   <div class="panel" id="fw-vite" hidden>
-<pre><code>npm create vite@latest frontend -- --template vanilla-ts
-cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+<pre><code>pnpm create vite frontend --template vanilla-ts
+cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm build
 
 APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
     <p>For development, run Vite's dev server and proxy the API to Rust:</p>
@@ -368,8 +368,8 @@ export default {
   </div>
 
   <div class="panel" id="fw-react" hidden>
-<pre><code>npm create vite@latest frontend -- --template react-ts
-cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+<pre><code>pnpm create vite frontend --template react-ts
+cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm build
 
 APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
 <pre><code>// useAuth.ts — the client above, wrapped in a hook
@@ -400,8 +400,8 @@ export function useAuth() {
   </div>
 
   <div class="panel" id="fw-vue" hidden>
-<pre><code>npm create vite@latest frontend -- --template vue-ts
-cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+<pre><code>pnpm create vite frontend --template vue-ts
+cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm build
 
 APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
 <pre><code>// stores/auth.ts — Pinia
@@ -424,8 +424,8 @@ export const useAuth = defineStore("auth", {
   </div>
 
   <div class="panel" id="fw-svelte" hidden>
-<pre><code>npm create vite@latest frontend -- --template svelte-ts
-cd frontend &amp;&amp; npm install &amp;&amp; npm run build
+<pre><code>pnpm create vite frontend --template svelte-ts
+cd frontend &amp;&amp; pnpm install &amp;&amp; pnpm build
 
 APP_STATIC_DIR=./frontend/dist cargo run</code></pre>
 <pre><code>// auth.ts — a store
@@ -504,7 +504,7 @@ export async function signIn(email: string, password: string) {
   </div>
 
   <div class="panel" id="css-tailwind" hidden>
-<pre><code>npm install -D tailwindcss @tailwindcss/vite</code></pre>
+<pre><code>pnpm add -D tailwindcss @tailwindcss/vite</code></pre>
 <pre><code>// vite.config.ts
 import tailwindcss from "@tailwindcss/vite";
 export default { plugins: [tailwindcss()] };</code></pre>
@@ -518,7 +518,7 @@ export default { plugins: [tailwindcss()] };</code></pre>
   </div>
 
   <div class="panel" id="css-sass" hidden>
-<pre><code>npm install -D sass</code></pre>
+<pre><code>pnpm add -D sass</code></pre>
     <p>
       Vite compiles <code>.scss</code> with no further configuration. Import it
       from your entry module and the build emits a plain stylesheet:
