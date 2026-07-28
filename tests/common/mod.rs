@@ -15,6 +15,7 @@ use bastion::{
         ServerConfig,
     },
     db,
+    plugin::Registry,
     repository::Repositories,
     server,
     service::AuthService,
@@ -66,6 +67,25 @@ pub struct TestOptions {
     pub cors_allowed_origins: Vec<String>,
     pub max_concurrent_hashes: usize,
     pub static_dir: Option<std::path::PathBuf>,
+    /// Defaults to effectively unlimited, because almost every test would
+    /// otherwise spend its budget on requests it does not care about. The rate
+    /// limit tests set this deliberately.
+    pub rate_limit: RateLimitConfig,
+    /// The plugins the spawned server runs. Defaults to the shipped set, so
+    /// tests exercise what production runs; a test that cares sets its own.
+    pub plugins: Registry,
+}
+
+/// Effectively unlimited. `per_second` is a replenish *period* in
+/// `tower_governor`, so a large burst with a slow period means the tests that
+/// are not about rate limiting never reach it.
+pub fn unlimited_rate_limit() -> RateLimitConfig {
+    RateLimitConfig {
+        global_per_second: 1,
+        global_burst: 100_000,
+        auth_per_second: 1,
+        auth_burst: 100_000,
+    }
 }
 
 impl Default for TestOptions {
@@ -80,6 +100,8 @@ impl Default for TestOptions {
             cors_allowed_origins: vec![],
             max_concurrent_hashes: 4,
             static_dir: None,
+            rate_limit: unlimited_rate_limit(),
+            plugins: Registry::builtin(),
         }
     }
 }
@@ -89,6 +111,7 @@ pub async fn spawn() -> TestApp {
 }
 
 pub async fn spawn_with(options: TestOptions) -> TestApp {
+    let plugins = options.plugins;
     let tempdir = tempfile::tempdir().expect("failed to create a temporary directory");
     let db_path = tempdir.path().join("test.db");
 
@@ -124,13 +147,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
             cors_allowed_origins: options.cors_allowed_origins.clone(),
             trust_proxy_headers: false,
         },
-        // Effectively unlimited: rate limiting has its own dedicated test.
-        rate_limit: RateLimitConfig {
-            global_per_second: 1,
-            global_burst: 100_000,
-            auth_per_second: 1,
-            auth_burst: 100_000,
-        },
+        rate_limit: options.rate_limit.clone(),
         bootstrap_admin: options
             .bootstrap_admin
             .map(|(email, password)| BootstrapAdmin { email, password }),
@@ -160,7 +177,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
     // the connection deadlines under test are the ones that ship.
     let served_state = state.clone();
     tokio::spawn(async move {
-        server::serve(listener, served_state, Handle::new())
+        server::serve(listener, served_state, plugins, Handle::new())
             .await
             .expect("test server stopped unexpectedly");
     });

@@ -20,6 +20,7 @@ pub mod db;
 pub mod domain;
 pub mod error;
 pub mod net;
+pub mod plugin;
 pub mod repository;
 pub mod security;
 pub mod server;

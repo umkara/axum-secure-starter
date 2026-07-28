@@ -11,38 +11,38 @@ pub mod health_handler;
 pub mod note_handler;
 pub mod path;
 
-use std::time::Duration;
-
 use axum::{
     Router,
     error_handling::HandleErrorLayer,
     extract::DefaultBodyLimit,
-    http::{HeaderName, HeaderValue, Method, StatusCode, header},
+    http::{HeaderName, StatusCode, header},
     routing::{delete, get, post},
 };
 use tower::{BoxError, ServiceBuilder};
-use tower_governor::{
-    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
-};
 use tower_http::{
     catch_panic::CatchPanicLayer,
-    cors::CorsLayer,
     limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     sensitive_headers::SetSensitiveRequestHeadersLayer,
     services::{ServeDir, ServeFile},
     timeout::TimeoutLayer,
-    trace::TraceLayer,
 };
 
 use crate::{
-    config::AppConfig, error::AppError, security::headers::SecurityHeaders, state::AppState,
+    error::AppError,
+    plugin::{Plugins, Stage},
+    security::headers::SecurityHeaders,
+    state::AppState,
 };
 
-const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+pub(crate) const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 /// Builds the fully wrapped application router.
-pub fn build_router(state: AppState) -> Router {
+///
+/// `plugins` may only add layers at the [`Stage`]s marked below. The core
+/// controls in this function are applied outside every one of those slots, so
+/// no plugin can remove them — see [`crate::plugin`].
+pub fn build_router(state: AppState, plugins: &Plugins) -> Router {
     let config = state.config_handle();
 
     // Health probes sit outside the rate limiter: a limiter that starves the
@@ -51,19 +51,20 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health/live", get(health_handler::live))
         .route("/health/ready", get(health_handler::ready));
 
-    // Credential endpoints get their own, much tighter bucket.
-    let auth_routes = with_rate_limit(
+    // Credential endpoints are their own stage: they carry the expensive,
+    // unauthenticated work, and the shipped limiter gives them a tighter
+    // bucket there than the rest of the API gets.
+    let auth_routes = plugins.apply(
+        Stage::Credentials,
         Router::new()
             .route("/auth/register", post(auth_handler::register))
             .route("/auth/login", post(auth_handler::login))
             .route("/auth/refresh", post(auth_handler::refresh))
             .route("/auth/logout", post(auth_handler::logout)),
-        &config,
-        config.rate_limit.auth_per_second,
-        config.rate_limit.auth_burst,
     );
 
-    let api_routes = with_rate_limit(
+    let api_routes = plugins.apply(
+        Stage::Api,
         Router::new()
             .route("/auth/password", post(auth_handler::change_password))
             .route(
@@ -77,9 +78,6 @@ pub fn build_router(state: AppState) -> Router {
                     .put(note_handler::update)
                     .delete(note_handler::delete),
             ),
-        &config,
-        config.rate_limit.global_per_second,
-        config.rate_limit.global_burst,
     );
 
     // The API's own fallback stays JSON: an unknown `/api/v1/...` path is a
@@ -111,7 +109,17 @@ pub fn build_router(state: AppState) -> Router {
                 .layer(SecurityHeaders::page_content_security_policy())
                 .layer(SecurityHeaders::asset_cache())
                 .service(ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html"))));
-            api.fallback_service(files)
+
+            if plugins.is_empty(Stage::Page) {
+                api.fallback_service(files)
+            } else {
+                // Reached through a `Router` because that is the only way to
+                // apply an erased layer from outside axum; skipped entirely
+                // when the stage is empty so static requests do not pay for a
+                // routing pass they do not need.
+                let pages = plugins.apply(Stage::Page, Router::new().fallback_service(files));
+                api.fallback_service(pages)
+            }
         }
         None => api.fallback(not_found),
     };
@@ -120,29 +128,37 @@ pub fn build_router(state: AppState) -> Router {
     // everything so a panic still produces a well-formed response, and body
     // limits sit above the handlers so oversized payloads are rejected before
     // they are buffered.
-    let stack = ServiceBuilder::new()
-        // A panicking handler becomes a 500 instead of a dropped connection.
+    //
+    // The stack is in two halves with `Stage::Outer` between them. Everything
+    // in `hardening` therefore runs outside every plugin — a plugin that strips
+    // a header has it written back on the way out, because these layers set
+    // theirs with `overriding`.
+    let hardening = ServiceBuilder::new()
+        // A panicking handler — or a panicking plugin — becomes a 500 instead
+        // of a dropped connection.
         .layer(CatchPanicLayer::new())
         // Correlates log lines across a request, and echoes the id back.
         .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
-        // Keeps credentials out of the tracing output below.
+        // Above every plugin on purpose: this is what keeps credentials out of
+        // anything downstream that prints headers, including a logging plugin.
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,
             header::COOKIE,
             header::PROXY_AUTHORIZATION,
         ]))
-        .layer(TraceLayer::new_for_http())
         .layer(SecurityHeaders::hsts())
         .layer(SecurityHeaders::no_sniff())
         .layer(SecurityHeaders::frame_options())
         .layer(SecurityHeaders::referrer_policy())
         .layer(SecurityHeaders::permissions_policy())
         .layer(SecurityHeaders::cross_origin_resource_policy())
-        .layer(SecurityHeaders::cross_origin_opener_policy())
-        .layer(cors_layer(&config))
-        // Converts the failures produced by the two layers below into the
-        // API's error shape instead of an opaque 500.
+        .layer(SecurityHeaders::cross_origin_opener_policy());
+
+    // The availability controls. `HandleErrorLayer` stays welded directly above
+    // the load shedder: put anything between them and a shed request becomes an
+    // opaque 500 instead of a 503.
+    let controls = ServiceBuilder::new()
         .layer(HandleErrorLayer::new(handle_middleware_error))
         // Sheds load rather than queueing without bound when saturated.
         .load_shed()
@@ -157,71 +173,18 @@ pub fn build_router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(config.server.body_limit_bytes))
         .layer(RequestBodyLimitLayer::new(config.server.body_limit_bytes));
 
-    router.layer(stack).with_state(state)
-}
-
-/// Applies per-client rate limiting to a group of routes.
-///
-/// Client identity comes from the socket address unless the deployment has
-/// declared that it sits behind a trusted proxy — honouring `X-Forwarded-For`
-/// otherwise lets any client forge its identity and bypass the limit outright.
-fn with_rate_limit(
-    router: Router<AppState>,
-    config: &AppConfig,
-    per_second: u64,
-    burst: u32,
-) -> Router<AppState> {
-    if config.security.trust_proxy_headers {
-        let governor = GovernorConfigBuilder::default()
-            .per_second(per_second)
-            .burst_size(burst)
-            .key_extractor(SmartIpKeyExtractor)
-            .finish()
-            .expect("rate limit configuration is valid");
-        router.layer(GovernorLayer::new(governor))
+    let router = if plugins.is_empty(Stage::Outer) {
+        // Nothing occupies the slot, so the two halves compose into one layer
+        // and the router is boxed exactly as often as it was before plugins
+        // existed.
+        router.layer(ServiceBuilder::new().layer(hardening).layer(controls))
     } else {
-        let governor = GovernorConfigBuilder::default()
-            .per_second(per_second)
-            .burst_size(burst)
-            .finish()
-            .expect("rate limit configuration is valid");
-        router.layer(GovernorLayer::new(governor))
-    }
-}
+        plugins
+            .apply(Stage::Outer, router.layer(controls))
+            .layer(hardening)
+    };
 
-fn cors_layer(config: &AppConfig) -> CorsLayer {
-    let origins: Vec<HeaderValue> = config
-        .security
-        .cors_allowed_origins
-        .iter()
-        .filter_map(|origin| origin.parse().ok())
-        .collect();
-
-    if origins.is_empty() {
-        // No origins configured: same-origin only. That is the default, and it
-        // is the safe one — an API with no browser clients needs no CORS.
-        return CorsLayer::new();
-    }
-
-    CorsLayer::new()
-        .allow_origin(origins)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            REQUEST_ID_HEADER,
-        ])
-        .expose_headers([REQUEST_ID_HEADER])
-        // Credentials travel in the Authorization header, not cookies, so
-        // credentialed CORS is not needed and is not enabled.
-        .allow_credentials(false)
-        .max_age(Duration::from_secs(600))
+    router.with_state(state)
 }
 
 async fn handle_middleware_error(error: BoxError) -> AppError {

@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration;
 
-use bastion::service::AdminBootstrap;
+use bastion::{config::RateLimitConfig, service::AdminBootstrap};
 use common::{TestOptions, login, register_and_login, spawn, spawn_with};
 use serde_json::Value;
 use std::{
@@ -935,5 +935,200 @@ async fn the_document_revalidates_while_assets_may_be_cached() {
         deep.headers()["cache-control"],
         "no-cache",
         "the SPA fallback is the document too"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+//
+// The limiter shipped without a single test: the harness sets an effectively
+// unlimited bucket, and nothing else ever provoked a 429. These pin the
+// behaviour before the stack is refactored, because a limiter that silently
+// stops limiting looks exactly like one that works.
+// ---------------------------------------------------------------------------
+
+/// `per_second` is a replenish *period* in `tower_governor`, not a rate: a
+/// large value means "do not refill during this test".
+fn tight_auth_bucket(burst: u32) -> RateLimitConfig {
+    RateLimitConfig {
+        auth_per_second: 3600,
+        auth_burst: burst,
+        ..common::unlimited_rate_limit()
+    }
+}
+
+/// Sends `count` logins for an account that does not exist, and returns the
+/// statuses. Sequential on purpose: concurrent requests race the governor's
+/// clock and make the count flaky.
+async fn spend_auth_bucket(app: &common::TestApp, count: usize) -> Vec<u16> {
+    let mut statuses = Vec::with_capacity(count);
+    for _ in 0..count {
+        let response = app
+            .client
+            .post(app.url("/api/v1/auth/login"))
+            .json(&serde_json::json!({ "email": "nobody@example.com", "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap();
+        statuses.push(response.status().as_u16());
+    }
+    statuses
+}
+
+#[tokio::test]
+async fn the_auth_bucket_returns_429_once_the_burst_is_spent() {
+    let app = spawn_with(TestOptions {
+        rate_limit: tight_auth_bucket(3),
+        ..Default::default()
+    })
+    .await;
+
+    let statuses = spend_auth_bucket(&app, 6).await;
+
+    assert!(
+        statuses.iter().take(3).all(|status| *status != 429),
+        "the burst must be spendable before the limiter engages: {statuses:?}"
+    );
+    assert!(
+        statuses.contains(&429),
+        "the limiter must reject once the burst is spent: {statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn health_stays_reachable_while_the_auth_bucket_is_exhausted() {
+    let app = spawn_with(TestOptions {
+        rate_limit: tight_auth_bucket(2),
+        ..Default::default()
+    })
+    .await;
+
+    let statuses = spend_auth_bucket(&app, 8).await;
+    assert!(statuses.contains(&429), "precondition: bucket exhausted");
+
+    // The probes sit outside the limiter deliberately: a limiter that starves
+    // the orchestrator's probes turns a traffic spike into a restart loop.
+    let live = app
+        .client
+        .get(app.url("/health/live"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(live.status(), 200, "probes must never be rate limited");
+}
+
+#[tokio::test]
+async fn a_429_still_carries_the_hardening_headers() {
+    let app = spawn_with(TestOptions {
+        rate_limit: tight_auth_bucket(1),
+        ..Default::default()
+    })
+    .await;
+
+    let mut rejected = None;
+    for _ in 0..6 {
+        let response = app
+            .client
+            .post(app.url("/api/v1/auth/login"))
+            .json(&serde_json::json!({ "email": "nobody@example.com", "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap();
+        if response.status() == 429 {
+            rejected = Some(response);
+            break;
+        }
+    }
+
+    // The limiter short-circuits below the header layers, so a rejection is the
+    // response most likely to escape them.
+    let response = rejected.expect("the limiter should have rejected a request");
+    let headers = response.headers();
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-frame-options"], "DENY");
+    assert_eq!(headers["referrer-policy"], "no-referrer");
+    assert_eq!(headers["cross-origin-resource-policy"], "same-origin");
+    assert!(headers.contains_key("content-security-policy"));
+    assert!(headers.contains_key("permissions-policy"));
+    assert!(headers.contains_key("strict-transport-security"));
+    assert!(headers.contains_key("x-request-id"));
+}
+
+#[tokio::test]
+async fn the_credential_bucket_and_the_general_bucket_are_separate() {
+    let app = spawn_with(TestOptions {
+        rate_limit: tight_auth_bucket(4),
+        ..Default::default()
+    })
+    .await;
+
+    // Registration and the first login spend two of the four.
+    let (access, _) = register_and_login(&app, "separate@example.com", PASSWORD).await;
+
+    let statuses = spend_auth_bucket(&app, 6).await;
+    assert!(
+        statuses.contains(&429),
+        "precondition: the credential bucket is exhausted: {statuses:?}"
+    );
+
+    // A different bucket entirely, so the authenticated API stays usable while
+    // someone is hammering the login endpoint.
+    let notes = app
+        .client
+        .get(app.url("/api/v1/notes"))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        notes.status(),
+        200,
+        "exhausting the credential bucket must not close the API"
+    );
+}
+
+#[tokio::test]
+async fn a_429_is_the_one_response_that_is_not_the_json_envelope() {
+    let app = spawn_with(TestOptions {
+        rate_limit: tight_auth_bucket(1),
+        ..Default::default()
+    })
+    .await;
+
+    let mut rejected = None;
+    for _ in 0..6 {
+        let response = app
+            .client
+            .post(app.url("/api/v1/auth/login"))
+            .json(&serde_json::json!({ "email": "nobody@example.com", "password": PASSWORD }))
+            .send()
+            .await
+            .unwrap();
+        if response.status() == 429 {
+            rejected = Some(response);
+            break;
+        }
+    }
+
+    let response = rejected.expect("the limiter should have rejected a request");
+
+    // `tower_governor` writes these, and a client backing off correctly depends
+    // on them.
+    assert!(response.headers().contains_key("retry-after"));
+    assert!(response.headers().contains_key("x-ratelimit-after"));
+
+    // Characterisation, not endorsement: the limiter answers with its own plain
+    // text rather than the `{"error":{"code":..}}` shape every other route
+    // uses, because it short-circuits below the handlers that produce it. This
+    // test exists so that inconsistency cannot change silently — a client
+    // branching on `error.code` gets nothing to branch on here.
+    let body = response.text().await.unwrap();
+    assert!(
+        body.starts_with("Too Many Requests"),
+        "unexpected limiter body: {body}"
+    );
+    assert!(
+        serde_json::from_str::<Value>(&body).is_err(),
+        "if this became JSON, the envelope decision was made by accident: {body}"
     );
 }

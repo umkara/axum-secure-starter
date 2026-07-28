@@ -21,7 +21,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tower::Layer;
 
 use crate::{
-    api::path::CanonicalPathLayer, config::AppConfig, net::ConnectionLimitAcceptor, state::AppState,
+    api::path::CanonicalPathLayer,
+    config::AppConfig,
+    net::ConnectionLimitAcceptor,
+    plugin::{Registry, RequestFilterLayer},
+    state::AppState,
 };
 
 /// Serves until the handle is told to shut down.
@@ -32,14 +36,28 @@ use crate::{
 pub async fn serve(
     listener: std::net::TcpListener,
     state: AppState,
+    plugins: Registry,
     handle: Handle<SocketAddr>,
 ) -> anyhow::Result<()> {
     let config = state.config_handle();
 
+    // Resolved before the acceptor exists, so a plugin that refuses its
+    // settings stops the server rather than failing on somebody's first
+    // request.
+    let plugins = plugins
+        .resolve(&config)
+        .context("a plugin refused its configuration")?;
+    tracing::info!(plugins = ?plugins.enabled(), "middleware plugins resolved");
+
     // Wraps the router rather than sitting inside it: middleware added with
     // `Router::layer` runs after route matching, which is too late to decide
     // which route a path should reach.
-    let app = CanonicalPathLayer.layer(crate::api::build_router(state));
+    //
+    // Pre-routing filters sit above canonicalisation so they see the URI the
+    // client actually sent — and because they can only reject, canonicalisation
+    // still runs underneath whatever they decide.
+    let app = RequestFilterLayer::new(plugins.filters())
+        .layer(CanonicalPathLayer.layer(crate::api::build_router(state, &plugins)));
     let make_service = ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
         SocketAddr,
     >(app);

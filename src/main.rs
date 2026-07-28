@@ -6,8 +6,8 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Context;
 use axum_server::Handle;
 use bastion::{
-    config::AppConfig, db, repository::Repositories, server, service::AdminBootstrap,
-    state::AppState, telemetry,
+    config::AppConfig, db, plugin::Registry, repository::Repositories, server,
+    service::AdminBootstrap, state::AppState, telemetry,
 };
 use tokio::signal;
 
@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
         config.server.shutdown_grace,
     ));
 
-    server::serve(listener, state, handle).await?;
+    server::serve(listener, state, Registry::builtin(), handle).await?;
 
     tracing::info!("shutdown complete");
     Ok(())
