@@ -32,6 +32,17 @@ their history is in the git log.
 - `bastion --generate-token-keypair` prints a fresh pair as the environment
   lines that use it. Handled before configuration is loaded, since the usual
   reason to want a key is not having a configuration yet.
+- **Opaque access tokens** as a fourth format, `APP_TOKEN_FORMAT=opaque`. The
+  token is 32 bytes of CSPRNG output and the identity lives in a row, stored as
+  a SHA-256 digest, so verification is a lookup and revocation takes effect on
+  the next request. Logout ends that device's access token, a password change or
+  an admin action ends all of them, and a role change applies without waiting
+  for a refresh. Costs one indexed lookup per authenticated request — measured
+  at 23,931 req/s against 30,227 for `jwt` on `GET /api/v1/notes` — and there is
+  deliberately no cache, because a cached verification would reintroduce the
+  window the format exists to close.
+- Migration `0002_access_tokens.sql`, and an `AccessTokenRepository` port. The
+  background janitor now sweeps every table with expiring rows rather than one.
 - `tests/tokens.rs`: the same session driven end to end through every configured
   format, plus proof that a token written in one format does not authenticate
   against a server running the other — in both directions, with the same key,
@@ -43,6 +54,14 @@ their history is in the git log.
 
 ### Changed
 
+- **Breaking:** `TokenIssuer` is now an async trait, because one implementation
+  reaches storage to answer. `issue` also takes the session (refresh-token
+  family) the access token belongs to, so a stored format can end one device's
+  session without touching the others; stateless formats ignore it. Two default
+  methods, `revoke_session` and `revoke_all_for_user`, do nothing unless a
+  format can honour them — which is the honest answer for a stateless token.
+- **Breaking:** `Repositories` gained `access_tokens`, and its `sweeper` field
+  became `sweepers`, a list. `TokenJanitor::new` takes that list.
 - `TokenIssuer` and `TokenIdentity` moved from `security::jwt` to
   `security::token`. Both are still re-exported from `security`, so
   `use bastion::security::TokenIssuer` is unaffected; a path naming `jwt`

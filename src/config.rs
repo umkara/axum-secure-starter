@@ -72,12 +72,16 @@ pub enum TokenFormat {
     /// PASETO v4.public: Ed25519 signatures. Anyone holding the public key can
     /// verify a token; only the holder of the private key can mint one.
     PasetoPublic,
+    /// A reference to server-side state: the token carries no identity, and
+    /// verifying one is a database lookup. The only format that can be revoked
+    /// before it expires.
+    Opaque,
 }
 
 impl TokenFormat {
     /// The accepted spellings, for error messages. Keep in step with
     /// [`TokenFormat::from_str`].
-    const SUPPORTED: &'static str = "`jwt`, `paseto-local`, `paseto-public`";
+    const SUPPORTED: &'static str = "`jwt`, `paseto-local`, `paseto-public`, `opaque`";
 
     /// Whether this format is signed with a key pair rather than a shared
     /// secret, and so needs [`SecurityConfig::token_private_key`] and
@@ -93,6 +97,7 @@ impl std::fmt::Display for TokenFormat {
             TokenFormat::Jwt => f.write_str("jwt"),
             TokenFormat::PasetoLocal => f.write_str("paseto-local"),
             TokenFormat::PasetoPublic => f.write_str("paseto-public"),
+            TokenFormat::Opaque => f.write_str("opaque"),
         }
     }
 }
@@ -108,6 +113,7 @@ impl FromStr for TokenFormat {
             // silently change which one it runs when that happens.
             "paseto-local" | "v4.local" => Ok(TokenFormat::PasetoLocal),
             "paseto-public" | "v4.public" => Ok(TokenFormat::PasetoPublic),
+            "opaque" | "reference" => Ok(TokenFormat::Opaque),
             other => Err(format!(
                 "expected one of {}, got `{other}`",
                 TokenFormat::SUPPORTED

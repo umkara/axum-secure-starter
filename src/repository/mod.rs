@@ -1,6 +1,7 @@
 //! Persistence. Each repository is a trait plus a SQLite implementation, so
 //! services depend on the contract and tests can substitute a fake.
 
+pub mod access_token_repository;
 pub mod error;
 pub mod health_repository;
 pub mod note_repository;
@@ -8,6 +9,7 @@ pub mod set;
 pub mod token_repository;
 pub mod user_repository;
 
+pub use access_token_repository::{AccessTokenRepository, SqliteAccessTokenRepository};
 pub use error::{RepositoryError, RepositoryResult};
 pub use health_repository::{HealthRepository, SqliteHealthRepository};
 pub use note_repository::{NoteRepository, SqliteNoteRepository};

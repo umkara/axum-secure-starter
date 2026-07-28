@@ -1,4 +1,5 @@
-//! Background sweep of refresh tokens that can no longer be redeemed.
+//! Background sweep of tokens that can no longer be used — refresh tokens,
+//! and the access tokens the opaque format stores.
 //!
 //! Its own type, with its own dependency, for two reasons. It is not an
 //! authentication use case — nobody is being authenticated — and it needs only
@@ -13,18 +14,22 @@ use chrono::Utc;
 use crate::{error::AppResult, repository::ExpiredTokenSweeper};
 
 pub struct TokenJanitor {
-    tokens: Arc<dyn ExpiredTokenSweeper>,
+    tables: Vec<Arc<dyn ExpiredTokenSweeper>>,
 }
 
 impl TokenJanitor {
-    pub fn new(tokens: Arc<dyn ExpiredTokenSweeper>) -> Self {
-        Self { tokens }
+    pub fn new(tables: Vec<Arc<dyn ExpiredTokenSweeper>>) -> Self {
+        Self { tables }
     }
 
     /// Removes rows past their expiry. Returns how many were removed, so the
     /// caller can log something meaningful only when there was something to do.
     pub async fn purge_expired(&self) -> AppResult<u64> {
-        let removed = self.tokens.delete_expired(Utc::now()).await?;
+        let now = Utc::now();
+        let mut removed = 0;
+        for table in &self.tables {
+            removed += table.delete_expired(now).await?;
+        }
         Ok(removed)
     }
 }

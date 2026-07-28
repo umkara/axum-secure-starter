@@ -114,6 +114,10 @@ impl SessionService {
         let digest = opaque_token::digest_of(presented);
         if let Some(record) = self.tokens.find_by_hash(&digest).await? {
             self.tokens.revoke_family(record.family).await?;
+            // A stateless access token outlives this call by up to its TTL;
+            // a stored one does not. Which of those you get is the format
+            // decision, made once in configuration.
+            self.issuer.revoke_session(record.family).await?;
         }
         Ok(())
     }
@@ -121,11 +125,14 @@ impl SessionService {
     /// Ends every session for a user: password change, admin action, incident.
     pub async fn revoke_all(&self, user_id: Uuid) -> AppResult<()> {
         self.tokens.revoke_all_for_user(user_id).await?;
+        self.issuer.revoke_all_for_user(user_id).await?;
         Ok(())
     }
 
     async fn issue(&self, user_id: Uuid, role: Role, family: Uuid) -> AppResult<AuthTokens> {
-        let access_token = self.issuer.issue(user_id, role)?;
+        // The family travels into the access token as well, so a format that
+        // stores its tokens can end this device's session and no other.
+        let access_token = self.issuer.issue(user_id, role, family).await?;
         let refresh = opaque_token::generate();
 
         let expires_at = Utc::now()

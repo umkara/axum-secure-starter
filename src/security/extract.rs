@@ -42,7 +42,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             .filter(|token| !token.is_empty())
             .ok_or(AppError::Unauthorized)?;
 
-        let identity = state.tokens().verify(token)?;
+        let identity = state.tokens().verify(token).await?;
 
         Ok(CurrentUser {
             id: identity.user_id,

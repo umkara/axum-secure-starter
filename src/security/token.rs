@@ -13,9 +13,13 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::{config::SecurityConfig, config::TokenFormat, domain::Role, error::AppResult};
+use crate::{
+    config::SecurityConfig, config::TokenFormat, domain::Role, error::AppResult,
+    repository::AccessTokenRepository,
+};
 
 /// A verified caller, recovered from a token.
 ///
@@ -38,22 +42,56 @@ pub struct TokenIdentity {
 /// `verify` returns [`AppError::Unauthorized`](crate::error::AppError) for every
 /// kind of failure — expired, forged, wrong audience, malformed. A client
 /// learns that its token was refused and nothing about why.
+///
+/// The methods are async because one implementation reaches storage to answer
+/// them. The stateless formats do not await anything, and the cost of the
+/// indirection is not measurable next to the signature check they do instead.
+#[async_trait]
 pub trait TokenIssuer: Send + Sync + 'static {
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String>;
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity>;
+    /// `session` is the refresh-token family this access token belongs to. A
+    /// stateless format has no use for it; a stored one needs it to end a
+    /// single device's session without touching the user's others.
+    async fn issue(&self, user_id: Uuid, role: Role, session: Uuid) -> AppResult<String>;
+    async fn verify(&self, token: &str) -> AppResult<TokenIdentity>;
     /// Lifetime advertised to clients as `expires_in`.
     fn ttl_seconds(&self) -> i64;
+
+    /// Ends one session's access tokens, on logout.
+    ///
+    /// Does nothing by default, and that default is the honest answer for a
+    /// stateless format: there is no record to remove, and the token stays
+    /// valid until it expires. Choosing such a format *is* choosing that.
+    async fn revoke_session(&self, session: Uuid) -> AppResult<()> {
+        let _ = session;
+        Ok(())
+    }
+
+    /// Ends every access token a user holds: password change, admin action,
+    /// incident. Does nothing by default, for the same reason.
+    async fn revoke_all_for_user(&self, user_id: Uuid) -> AppResult<()> {
+        let _ = user_id;
+        Ok(())
+    }
 }
 
 /// Builds the issuer the configuration asks for.
 ///
 /// Infallible by the time it runs: the format was parsed and validated in
 /// [`crate::config`], which is where an unusable value stops the server.
-pub fn issuer_for(config: &SecurityConfig) -> Arc<dyn TokenIssuer> {
+///
+/// `access_tokens` is handed in whether or not the chosen format uses it. The
+/// alternative — building the store only for the format that needs one — would
+/// put a conditional in the wiring, and the wiring is the one place worth
+/// keeping boring.
+pub fn issuer_for(
+    config: &SecurityConfig,
+    access_tokens: Arc<dyn AccessTokenRepository>,
+) -> Arc<dyn TokenIssuer> {
     match config.token_format {
         TokenFormat::Jwt => Arc::new(super::jwt::JwtCodec::new(config)),
         TokenFormat::PasetoLocal => Arc::new(super::paseto::PasetoLocalCodec::new(config)),
         TokenFormat::PasetoPublic => Arc::new(super::paseto::PasetoPublicCodec::new(config)),
+        TokenFormat::Opaque => Arc::new(super::opaque::OpaqueCodec::new(config, access_tokens)),
     }
 }
 
@@ -64,10 +102,11 @@ mod tests {
 
     /// Every format the factory can build. A new arm in `issuer_for` without a
     /// new entry here is a format nothing tests.
-    const FORMATS: [TokenFormat; 3] = [
+    const FORMATS: [TokenFormat; 4] = [
         TokenFormat::Jwt,
         TokenFormat::PasetoLocal,
         TokenFormat::PasetoPublic,
+        TokenFormat::Opaque,
     ];
 
     /// A configuration carrying whatever key material the format needs: the
@@ -81,6 +120,15 @@ mod tests {
             token_public_key: Some(keys.1.clone()),
             ..config(secret)
         }
+    }
+
+    /// Every format is built through the same factory, so each one is handed a
+    /// store — the three stateless formats simply never touch it.
+    fn issuer(config: &SecurityConfig) -> Arc<dyn TokenIssuer> {
+        issuer_for(
+            config,
+            crate::service::fakes::InMemoryAccessTokenRepository::new(),
+        )
     }
 
     fn key_pair() -> (Vec<u8>, Vec<u8>) {
@@ -105,20 +153,23 @@ mod tests {
         }
     }
 
-    #[test]
-    fn every_format_round_trips_through_the_trait() {
+    #[tokio::test]
+    async fn every_format_round_trips_through_the_trait() {
         let keys = key_pair();
 
         for format in FORMATS {
-            let issuer = issuer_for(&config_for(
+            let issuer = issuer(&config_for(
                 format,
                 "a-secret-long-enough-for-the-validator",
                 &keys,
             ));
             let user = Uuid::new_v4();
 
-            let token = issuer.issue(user, Role::User).unwrap();
-            let identity = issuer.verify(&token).unwrap();
+            let token = issuer
+                .issue(user, Role::User, Uuid::new_v4())
+                .await
+                .unwrap();
+            let identity = issuer.verify(&token).await.unwrap();
 
             assert_eq!(identity.user_id, user, "{format}");
             assert_eq!(identity.role, Role::User, "{format}");
@@ -126,49 +177,57 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_format_accepts_a_token_built_from_another_key() {
-        for format in FORMATS {
+    #[tokio::test]
+    async fn no_format_accepts_a_token_built_from_another_key() {
+        // The opaque format is excluded on purpose: its tokens are references
+        // rather than anything derived from a key, and two issuers with
+        // separate stores is the case `no_format_accepts_a_token_written_in_another_one`
+        // already covers.
+        for format in FORMATS.into_iter().filter(|f| *f != TokenFormat::Opaque) {
             // Different key material on both sides, whichever kind the format
             // uses: a different shared secret, or a different key pair.
-            let ours = issuer_for(&config_for(
+            let ours = issuer(&config_for(
                 format,
                 "a-secret-long-enough-for-the-validator",
                 &key_pair(),
             ));
-            let theirs = issuer_for(&config_for(
+            let theirs = issuer(&config_for(
                 format,
                 "a-different-secret-of-sufficient-length",
                 &key_pair(),
             ));
 
-            let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
+            let token = theirs
+                .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+                .await
+                .unwrap();
 
             // The seam must not become a place where verification is skipped:
             // an issuer built here still checks what its format promises.
-            assert!(ours.verify(&token).is_err(), "{format}");
+            assert!(ours.verify(&token).await.is_err(), "{format}");
         }
     }
 
-    #[test]
-    fn no_format_accepts_a_token_written_in_another_one() {
+    #[tokio::test]
+    async fn no_format_accepts_a_token_written_in_another_one() {
         let secret = "a-secret-long-enough-for-the-validator";
         let keys = key_pair();
 
         for ours in FORMATS {
-            let issuer = issuer_for(&config_for(ours, secret, &keys));
+            let ours_issuer = issuer(&config_for(ours, secret, &keys));
 
             for theirs in FORMATS.into_iter().filter(|other| *other != ours) {
                 // Same key material, same issuer, same audience: only the
                 // format differs. Switching APP_TOKEN_FORMAT must invalidate
                 // the tokens already in circulation rather than half-accept
                 // them.
-                let foreign = issuer_for(&config_for(theirs, secret, &keys))
-                    .issue(Uuid::new_v4(), Role::Admin)
+                let foreign = issuer(&config_for(theirs, secret, &keys))
+                    .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+                    .await
                     .unwrap();
 
                 assert!(
-                    issuer.verify(&foreign).is_err(),
+                    ours_issuer.verify(&foreign).await.is_err(),
                     "a {theirs} token authenticated against {ours}"
                 );
             }

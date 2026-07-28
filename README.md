@@ -65,7 +65,7 @@ request logging and four pre-routing guards ship as [plugins](#middleware-plugin
 A plugin can only add; it cannot remove, replace or reorder a core protection,
 and that is enforced by the types rather than by review.
 
-**Tests that prove it.** 142 of them, including 31 that actively attack the
+**Tests that prove it.** 151 of them, including 31 that actively attack the
 server — SQL injection, forged and downgraded JWTs, privilege escalation,
 request smuggling, path confusion, timing-based account enumeration, login
 floods — and 23 that attack the plugin system with plugins written to break it.
@@ -210,7 +210,7 @@ Two tokens, with different jobs:
 | Format | Signed JWT, or [another format](#access-token-formats) | Opaque random string |
 | Lifetime | 15 minutes | 14 days |
 | Sent with | Every API request | Only to `/auth/refresh` |
-| Stored server-side | No | Yes, as a SHA-256 digest |
+| Stored server-side | No, unless the format is `opaque` | Yes, as a SHA-256 digest |
 
 **What your client should do:**
 
@@ -374,6 +374,7 @@ The full list with comments is in [`.env.example`](.env.example).
 | `jwt` *(default)* | HS256 JWT, pinned to one algorithm, issuer and audience |
 | `paseto-local` | PASETO v4.local — XChaCha20-Poly1305, encrypted payload |
 | `paseto-public` | PASETO v4.public — Ed25519 signatures, readable payload |
+| `opaque` | A reference to a server-side row. Revocable before expiry |
 
 An unknown value stops the server. A deployment that asked for one format and
 silently got another is the mistake this setting exists to prevent.
@@ -415,6 +416,36 @@ that makes it unusable as any other key.
 | `APP_JWT_SECRET` | `jwt`, `paseto-local` |
 | `APP_TOKEN_PRIVATE_KEY` | `paseto-public` — 64 bytes, base64 |
 | `APP_TOKEN_PUBLIC_KEY` | `paseto-public` — 32 bytes, base64 |
+| *(none)* | `opaque` — the token is a random string, not a key derivation |
+
+**`opaque`** is the only format that can be taken back. The other three are
+stateless: the identity travels inside the token, so a password change, a
+sacking or a stolen laptop leaves it working until it expires. Fifteen minutes
+caps that window; it does not close it.
+
+An opaque token is 32 bytes of CSPRNG output that means nothing on its own —
+the identity lives in a row, stored as a SHA-256 digest like a refresh token, so
+a database dump cannot be replayed. Deleting the row ends the session on the
+very next request. That is what makes these work:
+
+| Event | `jwt`, `paseto-*` | `opaque` |
+| --- | --- | --- |
+| Logout | that device's access token lives on until expiry | gone immediately, other devices untouched |
+| Password change | every access token lives on until expiry | gone immediately |
+| Admin ends a user's sessions | same | gone immediately |
+| Role change | takes effect at the next refresh | takes effect on the next request |
+
+The cost is one indexed lookup per authenticated request. Measured on the same
+machine, interleaved, `GET /api/v1/notes` with `ab -k -c 50 -n 10000`: **30,227
+req/s with `jwt`, 23,931 with `opaque`** — around 20 %, with a wider spread
+under load. The server also stops being able to verify a token without its
+database.
+
+There is deliberately **no cache**. Caching verified tokens would recover most
+of that cost and quietly reintroduce the window this format exists to close: a
+revocation would take effect when the cache entry expired rather than at once.
+If the lookup is too expensive for your traffic, a stateless format is the
+answer, not a stale cache.
 
 **Switching format invalidates every access token in circulation.** They fail
 closed — a token in the old format is refused, not half-accepted — and clients
@@ -649,7 +680,7 @@ keeps that true while still letting you add to it.
 cargo test
 ```
 
-142 tests across five groups:
+151 tests across five groups:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
@@ -826,9 +857,11 @@ Worth knowing before you build on it:
 - **No MFA**, and password strength is length-only — no breach-list check.
 - **`/auth/register` reveals whether an address is taken** by returning `409`.
   Closing that properly requires email verification.
-- **Access tokens cannot be revoked individually** — the cost of keeping them
-  stateless. The window is 15 minutes; `/auth/password` and the admin endpoint
-  revoke refresh tokens immediately.
+- **Access tokens cannot be revoked individually under the default format** —
+  the cost of keeping them stateless. The window is 15 minutes; `/auth/password`
+  and the admin endpoint revoke refresh tokens immediately. Set
+  `APP_TOKEN_FORMAT=opaque` to close the window instead, at one database lookup
+  per request — see [access token formats](#access-token-formats).
 - **No response compression**, deliberately: compressing responses that contain
   tokens alongside attacker-influenced content is the BREACH setup.
 - **Volumetric DDoS is out of scope.** Everything here bounds what one

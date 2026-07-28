@@ -18,10 +18,11 @@ const PASSWORD: &str = "correct horse battery staple";
 /// Every format the server can be configured with. A format added to
 /// `TokenFormat` without an entry here is a format nothing exercises end to
 /// end.
-const FORMATS: [TokenFormat; 3] = [
+const FORMATS: [TokenFormat; 4] = [
     TokenFormat::Jwt,
     TokenFormat::PasetoLocal,
     TokenFormat::PasetoPublic,
+    TokenFormat::Opaque,
 ];
 
 async fn spawn_with_format(format: TokenFormat) -> common::TestApp {
@@ -181,6 +182,132 @@ async fn a_token_written_in_another_format_does_not_authenticate() {
         .await
         .unwrap();
     assert_eq!(refused.status(), 401, "nor the other way round");
+}
+
+/// Whether `token` still opens the API.
+async fn still_works(app: &common::TestApp, token: &str) -> bool {
+    app.client
+        .get(app.url("/api/v1/notes"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        == 200
+}
+
+#[tokio::test]
+async fn changing_a_password_ends_a_stored_access_token_at_once_and_a_stateless_one_at_expiry() {
+    for format in FORMATS {
+        let app = spawn_with_format(format).await;
+        let email = format!("revoke-{format}@example.com");
+        let (access, _) = register_and_login(&app, &email, PASSWORD).await;
+
+        let changed = app
+            .client
+            .post(app.url("/api/v1/auth/password"))
+            .bearer_auth(&access)
+            .json(&serde_json::json!({
+                "current_password": PASSWORD,
+                "new_password": "a-different-long-passphrase",
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(changed.status(), 204, "{format}: changing the password");
+
+        // The difference the format makes, stated as an assertion rather than
+        // as documentation: a stored token is gone on the next request, a
+        // stateless one keeps working until it expires. Both are defensible;
+        // only one of them is what most people assume is happening.
+        let survived = still_works(&app, &access).await;
+        match format {
+            TokenFormat::Opaque => assert!(
+                !survived,
+                "a stored access token must not survive a password change"
+            ),
+            _ => assert!(
+                survived,
+                "{format} is stateless: nothing can withdraw a live token"
+            ),
+        }
+    }
+}
+
+#[tokio::test]
+async fn logging_out_ends_a_stored_access_token_for_that_session_only() {
+    let app = spawn_with_format(TokenFormat::Opaque).await;
+
+    // Two logins for one account: two sessions, as two devices would be.
+    let (phone, phone_refresh) = register_and_login(&app, "devices@example.com", PASSWORD).await;
+    let (laptop, _) = common::login(&app, "devices@example.com", PASSWORD).await;
+
+    let logged_out = app
+        .client
+        .post(app.url("/api/v1/auth/logout"))
+        .json(&serde_json::json!({ "refresh_token": phone_refresh }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logged_out.status(), 204);
+
+    assert!(
+        !still_works(&app, &phone).await,
+        "logging out must end that device's access token immediately"
+    );
+    assert!(
+        still_works(&app, &laptop).await,
+        "and must not touch the user's other sessions"
+    );
+}
+
+#[tokio::test]
+async fn an_administrator_can_end_every_session_a_user_holds() {
+    let app = spawn_with(TestOptions {
+        token_format: TokenFormat::Opaque,
+        bootstrap_admin: Some((
+            "admin@example.com".into(),
+            "a-long-bootstrap-password".into(),
+        )),
+        ..Default::default()
+    })
+    .await;
+
+    let (admin, _) = common::login(&app, "admin@example.com", "a-long-bootstrap-password").await;
+
+    // Registered by hand rather than through the helper, because the response
+    // is where the user id comes from.
+    let created: Value = app
+        .client
+        .post(app.url("/api/v1/auth/register"))
+        .json(&serde_json::json!({ "email": "victim@example.com", "password": PASSWORD }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = created["id"].as_str().expect("the id is in the response");
+
+    let (victim, _) = common::login(&app, "victim@example.com", PASSWORD).await;
+    assert!(
+        still_works(&app, &victim).await,
+        "precondition: the victim has a live session"
+    );
+
+    let revoked = app
+        .client
+        .delete(app.url(&format!("/api/v1/admin/users/{id}/sessions")))
+        .bearer_auth(&admin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 204, "the admin revocation succeeded");
+
+    assert!(
+        !still_works(&app, &victim).await,
+        "an administrator ending a user's sessions must end them now"
+    );
 }
 
 #[tokio::test]

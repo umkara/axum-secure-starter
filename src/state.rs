@@ -35,7 +35,7 @@ impl AppState {
     pub fn new(config: Arc<AppConfig>, repos: Repositories) -> Self {
         // The configured format is turned into an implementation here and
         // nowhere else; everything downstream sees only the trait.
-        let token_issuer = token::issuer_for(&config.security);
+        let token_issuer = token::issuer_for(&config.security, repos.access_tokens.clone());
         let hasher: Arc<dyn CredentialHasher> =
             Arc::new(Argon2Hasher::new(config.security.max_concurrent_hashes));
 
@@ -48,7 +48,7 @@ impl AppState {
 
         let auth = Arc::new(AuthService::new(accounts, sessions));
         let notes = Arc::new(NoteService::new(repos.notes));
-        let janitor = Arc::new(TokenJanitor::new(repos.sweeper));
+        let janitor = Arc::new(TokenJanitor::new(repos.sweepers));
         let health = repos.health;
 
         Self {

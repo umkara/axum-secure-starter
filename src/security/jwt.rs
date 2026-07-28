@@ -18,6 +18,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, deco
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use async_trait::async_trait;
+
 use crate::{
     config::SecurityConfig,
     domain::Role,
@@ -77,12 +79,16 @@ impl JwtCodec {
     }
 }
 
+#[async_trait]
 impl TokenIssuer for JwtCodec {
     fn ttl_seconds(&self) -> i64 {
         self.ttl.as_secs() as i64
     }
 
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
+    async fn issue(&self, user_id: Uuid, role: Role, session: Uuid) -> AppResult<String> {
+        // A JWT carries no session reference: nothing can be revoked with it,
+        // so recording which session it belongs to would only be decoration.
+        let _ = session;
         let now = Utc::now().timestamp();
         let claims = Claims {
             sub: user_id.to_string(),
@@ -99,7 +105,7 @@ impl TokenIssuer for JwtCodec {
             .map_err(|e| AppError::Internal(anyhow!("failed to sign access token: {e}")))
     }
 
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
+    async fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
         let data = decode::<Claims>(token, &self.decoding, &self.validation)
             .map_err(|_| AppError::Unauthorized)?;
 

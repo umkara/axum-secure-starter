@@ -34,6 +34,7 @@
 
 use std::time::Duration;
 
+use async_trait::async_trait;
 use pasetors::{
     Local, Public,
     claims::{Claims, ClaimsValidationRules},
@@ -99,17 +100,21 @@ impl PasetoLocalCodec {
     }
 }
 
+#[async_trait]
 impl TokenIssuer for PasetoLocalCodec {
     fn ttl_seconds(&self) -> i64 {
         self.ttl.as_secs() as i64
     }
 
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
+    async fn issue(&self, user_id: Uuid, role: Role, session: Uuid) -> AppResult<String> {
+        // Stateless: nothing here can be revoked, so the session it belongs to
+        // is not worth recording.
+        let _ = session;
         let claims = claims_for(user_id, role, &self.issuer, &self.audience, self.ttl)?;
         local::encrypt(&self.key, &claims, None, None).map_err(internal)
     }
 
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
+    async fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
         // Every failure below collapses to `Unauthorized`. A client learns that
         // its token was refused and never which step refused it — the header
         // was wrong, the tag did not check out, the audience belonged to
@@ -179,17 +184,19 @@ impl PasetoPublicCodec {
     }
 }
 
+#[async_trait]
 impl TokenIssuer for PasetoPublicCodec {
     fn ttl_seconds(&self) -> i64 {
         self.ttl.as_secs() as i64
     }
 
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
+    async fn issue(&self, user_id: Uuid, role: Role, session: Uuid) -> AppResult<String> {
+        let _ = session;
         let claims = claims_for(user_id, role, &self.issuer, &self.audience, self.ttl)?;
         public::sign(&self.signing, &claims, None, None).map_err(internal)
     }
 
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
+    async fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
         let untrusted =
             UntrustedToken::<Public, V4>::try_from(token).map_err(|_| AppError::Unauthorized)?;
 
@@ -293,27 +300,33 @@ mod tests {
 
     const SECRET: &str = "a-secret-long-enough-for-the-validator";
 
-    #[test]
-    fn a_token_round_trips_and_announces_its_version() {
+    #[tokio::test]
+    async fn a_token_round_trips_and_announces_its_version() {
         let codec = PasetoLocalCodec::new(&config(SECRET));
         let user = Uuid::new_v4();
 
-        let token = codec.issue(user, Role::Admin).unwrap();
+        let token = codec
+            .issue(user, Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
         assert!(
             token.starts_with("v4.local."),
             "the version and purpose are part of the token, not a header: {token}"
         );
 
-        let identity = codec.verify(&token).unwrap();
+        let identity = codec.verify(&token).await.unwrap();
         assert_eq!(identity.user_id, user);
         assert_eq!(identity.role, Role::Admin);
     }
 
-    #[test]
-    fn the_payload_is_not_readable() {
+    #[tokio::test]
+    async fn the_payload_is_not_readable() {
         let codec = PasetoLocalCodec::new(&config(SECRET));
         let user = Uuid::new_v4();
-        let token = codec.issue(user, Role::Admin).unwrap();
+        let token = codec
+            .issue(user, Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
 
         // Unlike a JWT, whose claims are base64 and readable by anything that
         // handles the token.
@@ -323,17 +336,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn another_key_cannot_read_or_forge_one() {
+    #[tokio::test]
+    async fn another_key_cannot_read_or_forge_one() {
         let ours = PasetoLocalCodec::new(&config(SECRET));
         let theirs = PasetoLocalCodec::new(&config("a-different-secret-of-sufficient-length"));
 
-        let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
-        assert!(ours.verify(&token).is_err());
+        let token = theirs
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(ours.verify(&token).await.is_err());
     }
 
-    #[test]
-    fn a_token_minted_for_another_service_is_refused() {
+    #[tokio::test]
+    async fn a_token_minted_for_another_service_is_refused() {
         let ours = PasetoLocalCodec::new(&config(SECRET));
 
         let mut other_audience = config(SECRET);
@@ -341,44 +357,52 @@ mod tests {
         let theirs = PasetoLocalCodec::new(&other_audience);
 
         // Same key, so it decrypts. The claims are what refuse it.
-        let token = theirs.issue(Uuid::new_v4(), Role::User).unwrap();
+        let token = theirs
+            .issue(Uuid::new_v4(), Role::User, Uuid::new_v4())
+            .await
+            .unwrap();
         assert!(
-            ours.verify(&token).is_err(),
+            ours.verify(&token).await.is_err(),
             "decrypting is not the same as being addressed to us"
         );
 
         let mut other_issuer = config(SECRET);
         other_issuer.jwt_issuer = "somebody-else".into();
         let token = PasetoLocalCodec::new(&other_issuer)
-            .issue(Uuid::new_v4(), Role::User)
+            .issue(Uuid::new_v4(), Role::User, Uuid::new_v4())
+            .await
             .unwrap();
-        assert!(ours.verify(&token).is_err());
+        assert!(ours.verify(&token).await.is_err());
     }
 
-    #[test]
-    fn an_expired_token_is_refused() {
+    #[tokio::test]
+    async fn an_expired_token_is_refused() {
         let mut expiring = config(SECRET);
         expiring.access_token_ttl = Duration::from_secs(0);
         let codec = PasetoLocalCodec::new(&expiring);
 
-        let token = codec.issue(Uuid::new_v4(), Role::User).unwrap();
+        let token = codec
+            .issue(Uuid::new_v4(), Role::User, Uuid::new_v4())
+            .await
+            .unwrap();
         std::thread::sleep(Duration::from_millis(1100));
 
-        assert!(codec.verify(&token).is_err(), "exp is enforced");
+        assert!(codec.verify(&token).await.is_err(), "exp is enforced");
     }
 
-    #[test]
-    fn a_jwt_is_not_a_paseto() {
+    #[tokio::test]
+    async fn a_jwt_is_not_a_paseto() {
         let codec = PasetoLocalCodec::new(&config(SECRET));
 
         // Format confusion in the other direction is what `jwt.rs` pins by
         // fixing its algorithm list; this is the same check from this side.
         let jwt = crate::security::jwt::JwtCodec::new(&config(SECRET))
-            .issue(Uuid::new_v4(), Role::Admin)
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
             .unwrap();
 
         assert!(
-            codec.verify(&jwt).is_err(),
+            codec.verify(&jwt).await.is_err(),
             "a token of another format must not authenticate anybody"
         );
     }
@@ -392,22 +416,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_signed_token_round_trips_and_announces_its_version() {
+    #[tokio::test]
+    async fn a_signed_token_round_trips_and_announces_its_version() {
         let keys = generate_key_pair().unwrap();
         let codec = PasetoPublicCodec::new(&public_config(&keys));
         let user = Uuid::new_v4();
 
-        let token = codec.issue(user, Role::User).unwrap();
+        let token = codec.issue(user, Role::User, Uuid::new_v4()).await.unwrap();
         assert!(token.starts_with("v4.public."), "{token}");
 
-        let identity = codec.verify(&token).unwrap();
+        let identity = codec.verify(&token).await.unwrap();
         assert_eq!(identity.user_id, user);
         assert_eq!(identity.role, Role::User);
     }
 
-    #[test]
-    fn verifying_needs_only_the_public_half() {
+    #[tokio::test]
+    async fn verifying_needs_only_the_public_half() {
         let minting = generate_key_pair().unwrap();
         let unrelated = generate_key_pair().unwrap();
 
@@ -418,26 +442,35 @@ mod tests {
         // format: verification is not evidence of the ability to mint.
         let verifier = PasetoPublicCodec::new(&public_config(&(unrelated.0, minting.1.clone())));
 
-        let token = issuer.issue(Uuid::new_v4(), Role::Admin).unwrap();
-        assert!(verifier.verify(&token).is_ok());
+        let token = issuer
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(verifier.verify(&token).await.is_ok());
     }
 
-    #[test]
-    fn a_token_signed_by_another_key_pair_is_refused() {
+    #[tokio::test]
+    async fn a_token_signed_by_another_key_pair_is_refused() {
         let ours = PasetoPublicCodec::new(&public_config(&generate_key_pair().unwrap()));
         let theirs = PasetoPublicCodec::new(&public_config(&generate_key_pair().unwrap()));
 
-        let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
-        assert!(ours.verify(&token).is_err());
+        let token = theirs
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(ours.verify(&token).await.is_err());
     }
 
-    #[test]
-    fn the_signed_payload_is_readable_and_that_is_expected() {
+    #[tokio::test]
+    async fn the_signed_payload_is_readable_and_that_is_expected() {
         let keys = generate_key_pair().unwrap();
         let codec = PasetoPublicCodec::new(&public_config(&keys));
         let user = Uuid::new_v4();
 
-        let token = codec.issue(user, Role::Admin).unwrap();
+        let token = codec
+            .issue(user, Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
 
         // Signed, not encrypted: the claims are legible, as in a JWT. A
         // verifier that cannot read a token cannot act on it, so this is
@@ -456,24 +489,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_local_token_is_not_a_public_one() {
+    #[tokio::test]
+    async fn a_local_token_is_not_a_public_one() {
         let keys = generate_key_pair().unwrap();
         let signed = PasetoPublicCodec::new(&public_config(&keys));
         let encrypted = PasetoLocalCodec::new(&config(SECRET));
 
-        let local = encrypted.issue(Uuid::new_v4(), Role::Admin).unwrap();
+        let local = encrypted
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
         assert!(
-            signed.verify(&local).is_err(),
+            signed.verify(&local).await.is_err(),
             "the purpose is part of the token, and it is checked"
         );
 
-        let public = signed.issue(Uuid::new_v4(), Role::Admin).unwrap();
-        assert!(encrypted.verify(&public).is_err());
+        let public = signed
+            .issue(Uuid::new_v4(), Role::Admin, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(encrypted.verify(&public).await.is_err());
     }
 
-    #[test]
-    fn a_generated_pair_is_the_length_the_format_requires() {
+    #[tokio::test]
+    async fn a_generated_pair_is_the_length_the_format_requires() {
         let (private, public) = generate_key_pair().unwrap();
 
         // The config validator checks these lengths on the way in; if
@@ -487,18 +526,22 @@ mod tests {
         assert_ne!(private, other_private);
     }
 
-    #[test]
-    fn a_truncated_or_edited_token_is_refused() {
+    #[tokio::test]
+    async fn a_truncated_or_edited_token_is_refused() {
         let codec = PasetoLocalCodec::new(&config(SECRET));
-        let token = codec.issue(Uuid::new_v4(), Role::User).unwrap();
+        let token = codec
+            .issue(Uuid::new_v4(), Role::User, Uuid::new_v4())
+            .await
+            .unwrap();
 
-        assert!(codec.verify(&token[..token.len() - 4]).is_err());
-        assert!(codec.verify(&format!("{token}tampered")).is_err());
+        assert!(codec.verify(&token[..token.len() - 4]).await.is_err());
+        assert!(codec.verify(&format!("{token}tampered")).await.is_err());
         assert!(
             codec
                 .verify(&token.replace("v4.local.", "v4.public."))
+                .await
                 .is_err()
         );
-        assert!(codec.verify("").is_err());
+        assert!(codec.verify("").await.is_err());
     }
 }

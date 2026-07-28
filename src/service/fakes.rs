@@ -21,7 +21,9 @@ use crate::{
     domain::{Role, User},
     error::{AppError, AppResult},
     repository::{
-        ExpiredTokenSweeper, RepositoryError, RepositoryResult, TokenRepository, UserRepository,
+        AccessTokenRepository, ExpiredTokenSweeper, RepositoryError, RepositoryResult,
+        TokenRepository, UserRepository,
+        access_token_repository::{AccessTokenRecord, NewAccessToken},
         token_repository::{NewRefreshToken, RefreshTokenRecord},
         user_repository::NewUser,
     },
@@ -52,12 +54,13 @@ impl CredentialHasher for FakeHasher {
 /// only need identity to round-trip.
 pub struct FakeTokenIssuer;
 
+#[async_trait::async_trait]
 impl TokenIssuer for FakeTokenIssuer {
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
+    async fn issue(&self, user_id: Uuid, role: Role, _session: Uuid) -> AppResult<String> {
         Ok(format!("{user_id}:{}", role.as_str()))
     }
 
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
+    async fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
         let (id, role) = token.split_once(':').ok_or(AppError::Unauthorized)?;
         Ok(TokenIdentity {
             user_id: id.parse().map_err(|_| AppError::Unauthorized)?,
@@ -164,6 +167,70 @@ impl UserRepository for InMemoryUserRepository {
         if let Some(user) = users.iter_mut().find(|u| u.id == id) {
             user.role = role;
         }
+        Ok(())
+    }
+}
+
+/// Access-token storage in a map, for the opaque format's tests and for the
+/// wiring of every other format, which is handed a store it never touches.
+#[derive(Default)]
+pub struct InMemoryAccessTokenRepository {
+    tokens: Mutex<HashMap<Uuid, AccessTokenRecord>>,
+}
+
+impl InMemoryAccessTokenRepository {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// How many rows are live, so a test can assert that revoking removed
+    /// something rather than merely returning `Ok`.
+    pub fn live(&self) -> usize {
+        self.tokens.lock().unwrap().len()
+    }
+}
+
+#[async_trait]
+impl AccessTokenRepository for InMemoryAccessTokenRepository {
+    async fn insert(&self, token: NewAccessToken) -> RepositoryResult<()> {
+        self.tokens.lock().unwrap().insert(
+            token.id,
+            AccessTokenRecord {
+                id: token.id,
+                user_id: token.user_id,
+                token_hash: token.token_hash,
+                session: token.session,
+                role: token.role,
+                expires_at: token.expires_at,
+                created_at: Utc::now(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn find_by_hash(&self, token_hash: &str) -> RepositoryResult<Option<AccessTokenRecord>> {
+        Ok(self
+            .tokens
+            .lock()
+            .unwrap()
+            .values()
+            .find(|token| token.token_hash == token_hash)
+            .cloned())
+    }
+
+    async fn delete_by_session(&self, session: Uuid) -> RepositoryResult<()> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .retain(|_, token| token.session != session);
+        Ok(())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> RepositoryResult<()> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .retain(|_, token| token.user_id != user_id);
         Ok(())
     }
 }
