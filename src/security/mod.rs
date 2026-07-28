@@ -5,6 +5,7 @@ pub mod extract;
 pub mod headers;
 pub mod jwt;
 pub mod opaque_token;
+pub mod paseto;
 pub mod password;
 pub mod token;
 

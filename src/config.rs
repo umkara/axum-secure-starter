@@ -66,18 +66,22 @@ pub enum TokenFormat {
     /// HS256 JWT. The default, and what every version before 0.4 issued.
     #[default]
     Jwt,
+    /// PASETO v4.local: XChaCha20-Poly1305, with the version rather than a
+    /// header deciding the cryptography, and an encrypted payload.
+    PasetoLocal,
 }
 
 impl TokenFormat {
     /// The accepted spellings, for error messages. Keep in step with
     /// [`TokenFormat::from_str`].
-    const SUPPORTED: &'static str = "jwt";
+    const SUPPORTED: &'static str = "`jwt`, `paseto-local`";
 }
 
 impl std::fmt::Display for TokenFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenFormat::Jwt => f.write_str("jwt"),
+            TokenFormat::PasetoLocal => f.write_str("paseto-local"),
         }
     }
 }
@@ -88,6 +92,10 @@ impl FromStr for TokenFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "jwt" => Ok(TokenFormat::Jwt),
+            // `paseto` alone is deliberately not accepted: it will be ambiguous
+            // the moment the public variant lands, and a deployment should not
+            // silently change which one it runs when that happens.
+            "paseto-local" | "v4.local" => Ok(TokenFormat::PasetoLocal),
             other => Err(format!(
                 "expected one of {}, got `{other}`",
                 TokenFormat::SUPPORTED

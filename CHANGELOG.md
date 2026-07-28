@@ -12,8 +12,18 @@ their history is in the git log.
 ### Added
 
 - `APP_TOKEN_FORMAT` selects how access tokens are written, defaulting to `jwt`
-  — the only format so far, and what every earlier version issued. An unknown
-  value stops the server rather than falling back.
+  — what every earlier version issued. An unknown value stops the server rather
+  than falling back.
+- **PASETO v4.local** as a second format, `APP_TOKEN_FORMAT=paseto-local`.
+  XChaCha20-Poly1305 with the version rather than a header deciding the
+  cryptography, and an encrypted payload rather than readable base64 claims. The
+  key is derived from `APP_JWT_SECRET` as `SHA-256(domain || secret)`, since
+  v4.local needs exactly 32 bytes. Adds the `pasetors` dependency (v4 and std
+  features only).
+- `tests/tokens.rs`: the same session driven end to end through every configured
+  format, plus proof that a token written in one format does not authenticate
+  against a server running the other — in both directions, with the same key,
+  issuer and audience, so the format is the only difference.
 - `security::token`, holding `TokenIssuer`, `TokenIdentity` and `issuer_for`:
   the one place a configured format becomes an implementation. Adding a format
   means adding a module beside it and an arm to that match, and touching nothing

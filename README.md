@@ -65,7 +65,7 @@ request logging and four pre-routing guards ship as [plugins](#middleware-plugin
 A plugin can only add; it cannot remove, replace or reorder a core protection,
 and that is enforced by the types rather than by review.
 
-**Tests that prove it.** 114 of them, including 31 that actively attack the
+**Tests that prove it.** 123 of them, including 31 that actively attack the
 server — SQL injection, forged and downgraded JWTs, privilege escalation,
 request smuggling, path confusion, timing-based account enumeration, login
 floods — and 23 that attack the plugin system with plugins written to break it.
@@ -131,7 +131,7 @@ curl http://127.0.0.1:8443/health/ready
 ```
 
 ```json
-{ "status": "ready", "version": "0.1.0" }
+{ "status": "ready", "version": "0.4.0" }
 ```
 
 ---
@@ -207,7 +207,7 @@ Two tokens, with different jobs:
 
 | | Access token | Refresh token |
 | --- | --- | --- |
-| Format | Signed JWT | Opaque random string |
+| Format | Signed JWT, or [another format](#access-token-formats) | Opaque random string |
 | Lifetime | 15 minutes | 14 days |
 | Sent with | Every API request | Only to `/auth/refresh` |
 | Stored server-side | No | Yes, as a SHA-256 digest |
@@ -372,9 +372,28 @@ The full list with comments is in [`.env.example`](.env.example).
 | Value | Format |
 | --- | --- |
 | `jwt` *(default)* | HS256 JWT, pinned to one algorithm, issuer and audience |
+| `paseto-local` | PASETO v4.local — XChaCha20-Poly1305, encrypted payload |
 
 An unknown value stops the server. A deployment that asked for one format and
 silently got another is the mistake this setting exists to prevent.
+
+**`paseto-local`** is worth choosing when you would rather remove a footgun than
+guard it. A JWT names its own algorithm in a header the recipient must be careful
+not to trust — `alg=none`, RS256 verified as HS256 against the public key — and
+the JWT codec here closes that by pinning the accepted algorithm to one value.
+PASETO deletes the choice instead: `v4.local` *is* XChaCha20-Poly1305 by
+definition of the version, with no field an attacker can edit. The payload is
+also encrypted rather than merely signed, so a user id and role are not legible
+to anything that handles the token.
+
+Both formats use `APP_JWT_SECRET`. PASETO v4.local needs exactly 32 bytes, so
+the key is derived as `SHA-256(domain || secret)` with a domain string that
+makes it unusable as any other key.
+
+**Switching format invalidates every access token in circulation.** They fail
+closed — a token in the old format is refused, not half-accepted — and clients
+recover on their next refresh, since refresh tokens are unaffected. A test pins
+that in both directions.
 
 The choice reaches the application through `TokenIssuer` in
 [`src/security/token.rs`](src/security/token.rs), which is where a format is
@@ -604,7 +623,7 @@ keeps that true while still letting you add to it.
 cargo test
 ```
 
-114 tests across four groups:
+123 tests across five groups:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
@@ -621,6 +640,9 @@ cargo test
   guarantee — strippers that delete the hardening headers from inside two
   different stages, a plugin that panics mid-request, a check that waves through
   a path the core refuses — and asserts the core wins each time.
+- **`tests/tokens.rs`** runs the same session end to end through every
+  [access token format](#access-token-formats), and proves a token written in
+  one does not authenticate against a server running the other.
 
 Also useful:
 

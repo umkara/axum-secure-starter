@@ -25,6 +25,7 @@ hex = "0.4.3"
 hyper = { version = "1.11.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
+pasetors = { version = "0.7.7", default-features = false, features = ["std", "v4"] }
 rand = { version = "0.10.2", features = ["std", "std_rng"] }
 rustls = { version = "0.23.42", default-features = false, features = ["aws-lc-rs"] }
 serde = { version = "1.0.229", features = ["derive"] }

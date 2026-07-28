@@ -52,6 +52,7 @@ pub trait TokenIssuer: Send + Sync + 'static {
 pub fn issuer_for(config: &SecurityConfig) -> Arc<dyn TokenIssuer> {
     match config.token_format {
         TokenFormat::Jwt => Arc::new(super::jwt::JwtCodec::new(config)),
+        TokenFormat::PasetoLocal => Arc::new(super::paseto::PasetoLocalCodec::new(config)),
     }
 }
 
@@ -59,6 +60,17 @@ pub fn issuer_for(config: &SecurityConfig) -> Arc<dyn TokenIssuer> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// Every format the factory can build. A new arm in `issuer_for` without a
+    /// new entry here is a format nothing tests.
+    const FORMATS: [TokenFormat; 2] = [TokenFormat::Jwt, TokenFormat::PasetoLocal];
+
+    fn config_for(format: TokenFormat, secret: &str) -> SecurityConfig {
+        SecurityConfig {
+            token_format: format,
+            ..config(secret)
+        }
+    }
 
     fn config(secret: &str) -> SecurityConfig {
         SecurityConfig {
@@ -77,27 +89,63 @@ mod tests {
     }
 
     #[test]
-    fn the_configured_format_round_trips_through_the_trait() {
-        let issuer = issuer_for(&config("a-secret-long-enough-for-the-validator"));
-        let user = Uuid::new_v4();
+    fn every_format_round_trips_through_the_trait() {
+        for format in FORMATS {
+            let issuer = issuer_for(&config_for(
+                format,
+                "a-secret-long-enough-for-the-validator",
+            ));
+            let user = Uuid::new_v4();
 
-        let token = issuer.issue(user, Role::User).unwrap();
-        let identity = issuer.verify(&token).unwrap();
+            let token = issuer.issue(user, Role::User).unwrap();
+            let identity = issuer.verify(&token).unwrap();
 
-        assert_eq!(identity.user_id, user);
-        assert_eq!(identity.role, Role::User);
-        assert_eq!(issuer.ttl_seconds(), 900);
+            assert_eq!(identity.user_id, user, "{format}");
+            assert_eq!(identity.role, Role::User, "{format}");
+            assert_eq!(issuer.ttl_seconds(), 900, "{format}");
+        }
     }
 
     #[test]
-    fn an_issuer_built_from_another_key_refuses_the_token() {
-        let ours = issuer_for(&config("a-secret-long-enough-for-the-validator"));
-        let theirs = issuer_for(&config("a-different-secret-of-sufficient-length"));
+    fn no_format_accepts_a_token_built_from_another_key() {
+        for format in FORMATS {
+            let ours = issuer_for(&config_for(
+                format,
+                "a-secret-long-enough-for-the-validator",
+            ));
+            let theirs = issuer_for(&config_for(
+                format,
+                "a-different-secret-of-sufficient-length",
+            ));
 
-        let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
+            let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
 
-        // The seam must not become a place where verification is skipped: an
-        // issuer built here still checks what its format promises.
-        assert!(ours.verify(&token).is_err());
+            // The seam must not become a place where verification is skipped:
+            // an issuer built here still checks what its format promises.
+            assert!(ours.verify(&token).is_err(), "{format}");
+        }
+    }
+
+    #[test]
+    fn no_format_accepts_a_token_written_in_another_one() {
+        let secret = "a-secret-long-enough-for-the-validator";
+
+        for ours in FORMATS {
+            let issuer = issuer_for(&config_for(ours, secret));
+
+            for theirs in FORMATS.into_iter().filter(|other| *other != ours) {
+                // Same key, same issuer, same audience: only the format
+                // differs. Switching APP_TOKEN_FORMAT must invalidate the
+                // tokens already in circulation rather than half-accept them.
+                let foreign = issuer_for(&config_for(theirs, secret))
+                    .issue(Uuid::new_v4(), Role::Admin)
+                    .unwrap();
+
+                assert!(
+                    issuer.verify(&foreign).is_err(),
+                    "a {theirs} token authenticated against {ours}"
+                );
+            }
+        }
     }
 }

@@ -12,7 +12,7 @@ use axum_server::Handle;
 use bastion::{
     config::{
         AppConfig, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig, SecurityConfig,
-        ServerConfig,
+        ServerConfig, TokenFormat,
     },
     db,
     plugin::Registry,
@@ -74,6 +74,10 @@ pub struct TestOptions {
     /// The plugins the spawned server runs. Defaults to the shipped set, so
     /// tests exercise what production runs; a test that cares sets its own.
     pub plugins: Registry,
+    /// How access tokens are written. Defaults to the shipped format; the
+    /// token-format tests spawn a server per format and run the same flow
+    /// through each.
+    pub token_format: TokenFormat,
 }
 
 /// Effectively unlimited. `per_second` is a replenish *period* in
@@ -102,6 +106,7 @@ impl Default for TestOptions {
             static_dir: None,
             rate_limit: unlimited_rate_limit(),
             plugins: Registry::builtin(),
+            token_format: TokenFormat::default(),
         }
     }
 }
@@ -136,7 +141,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
             acquire_timeout: Duration::from_secs(5),
         },
         security: SecurityConfig {
-            token_format: bastion::config::TokenFormat::Jwt,
+            token_format: options.token_format,
             jwt_secret: TEST_JWT_SECRET.into(),
             jwt_issuer: TEST_JWT_ISSUER.into(),
             jwt_audience: TEST_JWT_AUDIENCE.into(),
