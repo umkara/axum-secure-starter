@@ -136,6 +136,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
             acquire_timeout: Duration::from_secs(5),
         },
         security: SecurityConfig {
+            token_format: bastion::config::TokenFormat::Jwt,
             jwt_secret: TEST_JWT_SECRET.into(),
             jwt_issuer: TEST_JWT_ISSUER.into(),
             jwt_audience: TEST_JWT_AUDIENCE.into(),

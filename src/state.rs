@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::{
     config::AppConfig,
     repository::{HealthRepository, Repositories},
-    security::{CredentialHasher, TokenIssuer, jwt::JwtCodec, password::Argon2Hasher},
+    security::{CredentialHasher, TokenIssuer, password::Argon2Hasher, token},
     service::{AccountService, AuthService, NoteService, SessionService, TokenJanitor},
 };
 
@@ -33,7 +33,9 @@ impl AppState {
     /// database backs them is decided by whoever built the [`Repositories`], not
     /// here — this function names no concrete store.
     pub fn new(config: Arc<AppConfig>, repos: Repositories) -> Self {
-        let token_issuer: Arc<dyn TokenIssuer> = Arc::new(JwtCodec::new(&config.security));
+        // The configured format is turned into an implementation here and
+        // nowhere else; everything downstream sees only the trait.
+        let token_issuer = token::issuer_for(&config.security);
         let hasher: Arc<dyn CredentialHasher> =
             Arc::new(Argon2Hasher::new(config.security.max_concurrent_hashes));
 

@@ -1,4 +1,9 @@
-//! Access-token issuing and verification (HS256 JWT).
+//! Access tokens as HS256 JWTs.
+//!
+//! One implementation of [`TokenIssuer`], selected by
+//! `APP_TOKEN_FORMAT=jwt`, which is the default. The trait and the identity it
+//! produces live in [`super::token`]; nothing outside this file needs to know a
+//! JWT is what went over the wire.
 //!
 //! Access tokens are short-lived and stateless. Long-lived sessions are carried
 //! by opaque refresh tokens (see `service::auth_service`), never by long JWT
@@ -17,6 +22,7 @@ use crate::{
     config::SecurityConfig,
     domain::Role,
     error::{AppError, AppResult},
+    security::token::{TokenIdentity, TokenIssuer},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,24 +42,6 @@ pub struct Claims {
 /// Verifies the signature *and* the registered claims, then hands back a typed
 /// identity. Anything that fails validation collapses to `Unauthorized` so the
 /// client learns nothing about *why* the token was rejected.
-#[derive(Debug, Clone)]
-pub struct TokenIdentity {
-    pub user_id: Uuid,
-    pub role: Role,
-}
-
-/// What the rest of the application needs from access tokens.
-///
-/// Depending on this rather than on [`JwtCodec`] keeps the services free of any
-/// particular token format, and lets a test substitute an issuer that does not
-/// sign anything.
-pub trait TokenIssuer: Send + Sync + 'static {
-    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String>;
-    fn verify(&self, token: &str) -> AppResult<TokenIdentity>;
-    /// Lifetime advertised to clients as `expires_in`.
-    fn ttl_seconds(&self) -> i64;
-}
-
 pub(crate) struct JwtCodec {
     encoding: EncodingKey,
     decoding: DecodingKey,

@@ -51,6 +51,51 @@ impl FromStr for Environment {
     }
 }
 
+/// How access tokens are written and read.
+///
+/// The application never branches on this — [`crate::security::token`] turns it
+/// into an implementation once, at start-up. It exists so that the token format
+/// is a deployment decision rather than a code change, and so that changing it
+/// is one reviewed line rather than a refactor.
+///
+/// Non-exhaustive because more formats are coming; matching on it exhaustively
+/// downstream would make each addition a breaking change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum TokenFormat {
+    /// HS256 JWT. The default, and what every version before 0.4 issued.
+    #[default]
+    Jwt,
+}
+
+impl TokenFormat {
+    /// The accepted spellings, for error messages. Keep in step with
+    /// [`TokenFormat::from_str`].
+    const SUPPORTED: &'static str = "jwt";
+}
+
+impl std::fmt::Display for TokenFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenFormat::Jwt => f.write_str("jwt"),
+        }
+    }
+}
+
+impl FromStr for TokenFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "jwt" => Ok(TokenFormat::Jwt),
+            other => Err(format!(
+                "expected one of {}, got `{other}`",
+                TokenFormat::SUPPORTED
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub addr: SocketAddr,
@@ -122,6 +167,9 @@ pub struct RateLimitConfig {
 
 #[derive(Debug, Clone)]
 pub struct SecurityConfig {
+    /// How access tokens are written and read. Refresh tokens are unaffected —
+    /// they are opaque and server-side whatever this says.
+    pub token_format: TokenFormat,
     pub jwt_secret: String,
     pub jwt_issuer: String,
     pub jwt_audience: String,
@@ -228,6 +276,7 @@ impl SecurityConfig {
         }
 
         Ok(Self {
+            token_format: parse_or("APP_TOKEN_FORMAT", TokenFormat::default())?,
             jwt_secret,
             jwt_issuer: env::var("APP_JWT_ISSUER").unwrap_or_else(|_| "bastion".into()),
             jwt_audience: env::var("APP_JWT_AUDIENCE").unwrap_or_else(|_| "bastion-api".into()),
@@ -331,5 +380,38 @@ where
             name,
             reason: e.to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Parsing is tested directly rather than through the environment: under
+    // edition 2024 `set_var` is unsafe, and a test that sets a variable while
+    // other tests run in parallel is racy.
+
+    #[test]
+    fn the_token_format_defaults_to_the_one_every_earlier_version_issued() {
+        assert_eq!(TokenFormat::default(), TokenFormat::Jwt);
+    }
+
+    #[test]
+    fn a_token_format_is_read_case_and_space_insensitively() {
+        for raw in ["jwt", "JWT", "  Jwt  "] {
+            assert_eq!(raw.parse::<TokenFormat>().unwrap(), TokenFormat::Jwt);
+        }
+    }
+
+    #[test]
+    fn an_unknown_token_format_names_the_ones_that_exist() {
+        // A typo must stop the server rather than fall back to a default: a
+        // deployment that asked for one format and silently got another is the
+        // failure this setting exists to prevent.
+        let rejected = "paseto".parse::<TokenFormat>().unwrap_err();
+        assert!(
+            rejected.contains(TokenFormat::SUPPORTED),
+            "the error must list what is accepted: {rejected}"
+        );
     }
 }

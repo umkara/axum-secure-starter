@@ -330,6 +330,7 @@ Invalid configuration stops the server rather than failing open later.
 | `APP_CORS_ALLOWED_ORIGINS` | empty | Comma-separated exact origins; `*` is rejected |
 | `APP_ACCESS_TOKEN_TTL_SECS` | `900` | Access token lifetime |
 | `APP_REFRESH_TOKEN_TTL_SECS` | `1209600` | Refresh token lifetime (14 days) |
+| `APP_TOKEN_FORMAT` | `jwt` | How access tokens are written. See [Access token formats](#access-token-formats) |
 
 **Rate limiting and lockout:**
 
@@ -363,6 +364,27 @@ human-readable output.
 [Middleware plugins](#middleware-plugins).
 
 The full list with comments is in [`.env.example`](.env.example).
+
+### Access token formats
+
+`APP_TOKEN_FORMAT` chooses how access tokens are written and read.
+
+| Value | Format |
+| --- | --- |
+| `jwt` *(default)* | HS256 JWT, pinned to one algorithm, issuer and audience |
+
+An unknown value stops the server. A deployment that asked for one format and
+silently got another is the mistake this setting exists to prevent.
+
+The choice reaches the application through `TokenIssuer` in
+[`src/security/token.rs`](src/security/token.rs), which is where a format is
+turned into an implementation — once, at start-up. Nothing above that trait
+knows what the string on the wire is, so a format is added by writing a module
+beside it, not by touching the extractor, the session service, or any handler.
+
+This affects **access tokens only**. Refresh tokens are opaque whatever this
+says: 32 bytes of CSPRNG output, stored as a SHA-256 digest, single-use, and
+revocable server-side.
 
 ---
 

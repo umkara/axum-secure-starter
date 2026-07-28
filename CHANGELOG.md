@@ -7,6 +7,26 @@ Notable changes to Bastion. The format follows
 This file starts at 0.4.0. Earlier versions were released before it existed;
 their history is in the git log.
 
+## Unreleased
+
+### Added
+
+- `APP_TOKEN_FORMAT` selects how access tokens are written, defaulting to `jwt`
+  — the only format so far, and what every earlier version issued. An unknown
+  value stops the server rather than falling back.
+- `security::token`, holding `TokenIssuer`, `TokenIdentity` and `issuer_for`:
+  the one place a configured format becomes an implementation. Adding a format
+  means adding a module beside it and an arm to that match, and touching nothing
+  that uses tokens.
+
+### Changed
+
+- `TokenIssuer` and `TokenIdentity` moved from `security::jwt` to
+  `security::token`. Both are still re-exported from `security`, so
+  `use bastion::security::TokenIssuer` is unaffected; a path naming `jwt`
+  directly needs updating. `security::jwt` is now one implementation of the
+  trait rather than its home.
+
 ## [0.4.0] — 2026-07-28
 
 ### Added

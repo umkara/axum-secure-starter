@@ -25,7 +25,7 @@ use crate::{
         token_repository::{NewRefreshToken, RefreshTokenRecord},
         user_repository::NewUser,
     },
-    security::{CredentialHasher, TokenIssuer, jwt::TokenIdentity},
+    security::{CredentialHasher, TokenIdentity, TokenIssuer},
 };
 
 /// Hashing that is instant and reversible-by-inspection: the "hash" is the

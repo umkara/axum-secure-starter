@@ -95,6 +95,7 @@ mod tests {
 
     fn service(max_login_attempts: i64) -> AuthService {
         let config = SecurityConfig {
+            token_format: crate::config::TokenFormat::Jwt,
             jwt_secret: "unused-by-the-fake-issuer-but-long-enough".into(),
             jwt_issuer: "test".into(),
             jwt_audience: "test".into(),
