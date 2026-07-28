@@ -30,6 +30,7 @@ request](#your-first-request) to try it.
 - [How authentication works](#how-authentication-works)
 - [API reference](#api-reference)
 - [Configuration](#configuration)
+- [Middleware plugins](#middleware-plugins)
 - [Enabling TLS](#enabling-tls)
 - [Creating an administrator](#creating-an-administrator)
 - [Deploying](#deploying)
@@ -59,9 +60,15 @@ response hardening headers on every response.
 handlers, services that own the rules, repositories behind traits — so swapping
 SQLite for Postgres means replacing repository implementations and nothing else.
 
-**Tests that prove it.** 68 of them, including 31 that actively attack the
-server: SQL injection, forged and downgraded JWTs, privilege escalation, request
-smuggling, path confusion, timing-based account enumeration, and login floods.
+**Middleware you can add without touching the stack.** Rate limiting, CORS,
+request logging and four pre-routing guards ship as [plugins](#middleware-plugins).
+A plugin can only add; it cannot remove, replace or reorder a core protection,
+and that is enforced by the types rather than by review.
+
+**Tests that prove it.** 114 of them, including 31 that actively attack the
+server — SQL injection, forged and downgraded JWTs, privilege escalation,
+request smuggling, path confusion, timing-based account enumeration, login
+floods — and 23 that attack the plugin system with plugins written to break it.
 
 ---
 
@@ -352,7 +359,129 @@ Invalid configuration stops the server rather than failing open later.
 `info,bastion=debug`. Production emits JSON; development emits
 human-readable output.
 
+**Plugins:** every `APP_PLUGIN_*` variable is listed under
+[Middleware plugins](#middleware-plugins).
+
 The full list with comments is in [`.env.example`](.env.example).
+
+---
+
+## Middleware plugins
+
+Rate limiting, CORS, request logging and four pre-routing guards are plugins
+rather than lines in the middleware stack. Seven in total, registered in code and
+tuned by environment, and all enabled by default. Two of them install nothing
+until you configure them: CORS needs an origin list, and the host guard needs a
+host list — in both cases the unconfigured state is the more restrictive one.
+
+**A plugin can only add.** It contributes a layer at one of four stages, or a
+pre-routing check, and nothing else. It cannot remove a hardening header, widen
+what the router accepts, rewrite a URL, or move itself in the stack:
+
+```
+CatchPanic ─ request id ─ the seven hardening headers
+  └── [Outer]
+        └── HandleError ─ load shed ─ concurrency ─ timeout ─ body limits
+              └── router ─ [Api] on /api/v1, [Credentials] on /auth, [Page] on files
+```
+
+Three things make that structural rather than conventional. The header layers
+sit outside every stage and write with `overriding`, so a plugin that strips a
+header has it written back on the way out. A plugin's layer is typed
+`Error = Infallible`, so it cannot produce the error `HandleErrorLayer` exists to
+catch and can never land between that and the load shedder. And a pre-routing
+check receives the request head by shared reference and can only return `Err` —
+a check that could rewrite a URL could undo the canonicalisation below it, which
+is the one way a plugin could make this server *less* strict.
+
+Health probes sit outside every stage, so nothing installed as a plugin can
+starve an orchestrator's liveness check.
+
+### What ships
+
+| Plugin | Stage | Does |
+| --- | --- | --- |
+| `path-guard` | pre-routing | Refuses encoded separators, dot segments, control characters, backslashes, oversized paths and repeated query keys |
+| `host-guard` | pre-routing | Refuses a `Host` outside your list. Off until you list hosts |
+| `method-guard` | pre-routing | Refuses methods with no route — `TRACE` above all |
+| `content-type-guard` | pre-routing | Requires JSON on API requests with a body. The CSRF guard for a token API |
+| `rate-limit` | credentials + API | Per-client buckets, tighter on `/auth/*`. Cannot be disabled in production |
+| `cors` | outer | The configured origin policy. With no origins listed it installs nothing, which is same-origin only |
+| `request-log` | outer | One structured line per request: method, matched route, status, latency |
+
+### Settings
+
+Each plugin reads `APP_PLUGIN_<NAME>_*`, and every one takes `ENABLED`. A value
+that does not parse stops the server; it is never a silent default.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `APP_PLUGIN_RATE_LIMIT_ENABLED` | `true` | Refused in production — the buckets themselves are `APP_RATE_LIMIT_*` |
+| `APP_PLUGIN_CORS_ENABLED` | `true` | Origins come from `APP_CORS_ALLOWED_ORIGINS` |
+| `APP_PLUGIN_CORS_MAX_AGE_SECS` | `600` | Preflight cache, maximum `86400` |
+| `APP_PLUGIN_REQUEST_LOG_ENABLED` | `true` | |
+| `APP_PLUGIN_REQUEST_LOG_SAMPLE` | `1` | Log one success in N. Failures are never sampled out |
+| `APP_PLUGIN_REQUEST_LOG_HEADERS` | empty | Header allowlist. A credential header is refused at start-up |
+| `APP_PLUGIN_REQUEST_LOG_CLIENT_IP` | `false` | Opt-in: an address is personal data |
+| `APP_PLUGIN_PATH_GUARD_ENABLED` | `true` | |
+| `APP_PLUGIN_PATH_GUARD_MAX_PATH_LEN` | `2048` | |
+| `APP_PLUGIN_PATH_GUARD_MAX_QUERY_LEN` | `4096` | |
+| `APP_PLUGIN_PATH_GUARD_MAX_QUERY_PAIRS` | `32` | |
+| `APP_PLUGIN_PATH_GUARD_ALLOW_DUPLICATE_QUERY` | `false` | `?limit=1&limit=2` parses differently in different parsers |
+| `APP_PLUGIN_HOST_GUARD_HOSTS` | empty | Exact hosts, comma-separated; `*` is rejected. Empty means the guard installs nothing |
+| `APP_PLUGIN_METHOD_GUARD_ENABLED` | `true` | |
+| `APP_PLUGIN_METHOD_GUARD_METHODS` | `GET,HEAD,POST,PUT,DELETE,OPTIONS` | |
+| `APP_PLUGIN_CONTENT_TYPE_GUARD_ENABLED` | `true` | |
+| `APP_PLUGIN_CONTENT_TYPE_GUARD_REQUIRE_JSON` | `true` | |
+
+Settings are resolved once, before the listener accepts anything: a plugin that
+refuses its configuration stops the server rather than failing on somebody's
+first request. The names that contributed something are logged at start-up.
+
+### Writing one
+
+Implement `Plugin`, returning a layer, a pre-routing check, or both. `Ok(None)`
+means configured off — the plugin then costs nothing at run time.
+
+```rust
+use bastion::plugin::{Plugin, PluginCx, PluginError, Plugins, RouteLayer, Stage};
+
+struct ServerTiming;
+
+impl Plugin for ServerTiming {
+    fn name(&self) -> &'static str {
+        "server-timing" // reads APP_PLUGIN_SERVER_TIMING_*
+    }
+
+    fn stage(&self) -> Stage {
+        Stage::Api
+    }
+
+    fn layer(&self, cx: &PluginCx<'_>) -> Result<Option<RouteLayer>, PluginError> {
+        if !cx.enabled(true)? {
+            return Ok(None);
+        }
+        Ok(Some(Plugins::erase(your_layer())))
+    }
+}
+```
+
+Register it in `main.rs`, where the order is source order — a plugin registered
+earlier wraps one registered later:
+
+```rust
+use bastion::plugin::Registry;
+
+let plugins = Registry::builtin().with(ServerTiming);
+server::serve(listener, state, plugins, handle).await?;
+```
+
+Configuration can switch a plugin off and tune it, but it cannot reorder the
+stack: a reordering that boots is a reordering nobody reviewed.
+
+`PluginCx` carries the validated `AppConfig` and the plugin's settings. It
+deliberately does not carry `AppState` — middleware that can reach the services
+is a route handler wearing a disguise.
 
 ---
 
@@ -438,7 +567,12 @@ field to a domain struct never silently starts exposing it.
 
 **Change a security parameter.** Argon2 cost is in `src/security/password.rs`,
 token claims and validation in `src/security/jwt.rs`, response headers in
-`src/security/headers.rs`, and middleware order in `src/api/mod.rs`.
+`src/security/headers.rs`, and the middleware stack in `src/api/mod.rs`.
+
+**Add middleware.** Write a [plugin](#middleware-plugins) and register it in
+`main.rs` rather than editing the stack. The stack is assembled once so a
+protection cannot be forgotten on an individual route; plugins are the seam that
+keeps that true while still letting you add to it.
 
 ---
 
@@ -448,18 +582,23 @@ token claims and validation in `src/security/jwt.rs`, response headers in
 cargo test
 ```
 
-68 tests across three groups:
+114 tests across four groups:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
   finish in under a millisecond.
 - **`tests/security.rs`** boots the real server on an ephemeral port and asserts
   the controls hold: token rotation, cross-account isolation, lockout, body
-  limits, connection limits, database file permissions, response headers.
+  limits, connection limits, database file permissions, response headers, rate
+  limiting.
 - **`tests/attacks.rs`** attacks that same server: SQL injection through every
   string that reaches the database, `alg=none` and tampered JWTs, mass
   assignment, path traversal and confusion, request smuggling, CORS lookalike
   origins, login timing, concurrent token double-spend, and login floods.
+- **`tests/plugins.rs`** registers plugins written to break the additive-only
+  guarantee — strippers that delete the hardening headers from inside two
+  different stages, a plugin that panics mid-request, a check that waves through
+  a path the core refuses — and asserts the core wins each time.
 
 Also useful:
 
@@ -504,6 +643,7 @@ src/
   repository/   persistence    — traits + SQLite implementations
   domain/       entities       — data and its own invariants
   security/     cross-cutting  — hashing, tokens, authn/authz, headers
+  plugin/       middleware     — the plugin framework and seven built-ins
   net.rs        connection admission control
   server.rs     serving: the one path both the binary and the tests use
   config.rs     configuration, validated at start-up
@@ -590,9 +730,11 @@ Resource queries are scoped by owner in SQL *and* in the service layer.
 sees it, page sizes are clamped server-side, and all SQL is parameterised.
 
 **Responses.** CSP, HSTS, `nosniff`, `DENY` framing, `no-referrer`, a
-restrictive Permissions-Policy, cross-origin isolation, and `no-store`. Internal
-errors log their cause and return a generic message — no SQL, paths, or panic
-text reaches a client.
+restrictive Permissions-Policy, cross-origin isolation, and `no-store` — on
+every response, including the ones produced above the router: a guard's
+rejection, a non-canonical path, and the 500 that replaces a panic. No plugin
+can remove them. Internal errors log their cause and return a generic message —
+no SQL, paths, or panic text reaches a client.
 
 **Availability.** Request deadlines and a concurrency ceiling that sheds load,
 with connection caps, header deadlines, and a TLS handshake deadline underneath

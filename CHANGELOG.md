@@ -1,0 +1,65 @@
+# Changelog
+
+Notable changes to Bastion. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[semantic versioning](https://semver.org/spec/v2.0.0.html).
+
+This file starts at 0.4.0. Earlier versions were released before it existed;
+their history is in the git log.
+
+## [0.4.0] — 2026-07-28
+
+### Added
+
+- **A middleware plugin system** (`src/plugin`). Middleware can now be added
+  without editing the stack in `build_router`. A plugin contributes a layer at
+  one of four stages — `Outer`, `Api`, `Credentials`, `Page` — or a pre-routing
+  check, and nothing else. It cannot remove, replace or reorder a core control,
+  which is enforced by the types: the hardening headers are written outside
+  every stage with `overriding`, a plugin's layer is typed `Error = Infallible`
+  so it can never sit between `HandleErrorLayer` and the load shedder, and a
+  pre-routing check takes the request head by shared reference and can only
+  return `Err`.
+- **Four pre-routing guards**, all on by default. `path-guard` refuses encoded
+  separators, dot segments, control characters, backslashes, oversized paths and
+  repeated query keys. `host-guard` refuses a `Host` outside a configured list
+  (off until you list one). `method-guard` refuses methods with no route,
+  `TRACE` above all. `content-type-guard` requires JSON on API requests carrying
+  a body, which is the CSRF guard for a token-authenticated API.
+- `APP_PLUGIN_*` configuration for all of the above, resolved once at start-up.
+  A plugin that refuses its settings stops the server rather than failing on the
+  first request. See the README and `.env.example`.
+- **`tests/plugins.rs`**: 23 tests that register plugins written to break the
+  additive-only guarantee and assert the core wins.
+- Rate limiting had shipped without a single test — the harness gave it an
+  effectively unlimited bucket, so nothing ever provoked a 429. Five tests now
+  pin it, including the fact that a 429 is the one response that is not the JSON
+  envelope.
+
+### Changed
+
+- **Breaking:** `api::build_router` takes a `&Plugins`, and `server::serve` takes
+  a `Registry`. Existing callers pass `Registry::builtin()` to keep what shipped,
+  or `Registry::empty()` for none.
+- **Breaking:** the seven single-header constructors on `SecurityHeaders`
+  (`hsts`, `no_sniff`, `frame_options`, `referrer_policy`, `permissions_policy`,
+  `cross_origin_resource_policy`, `cross_origin_opener_policy`) are replaced by
+  `SecurityHeaders::hardening()`, one layer that writes all seven, and
+  `SecurityHeaders::harden()`, the same set applied to a response directly. Two
+  ways to spell one policy is how the two drift apart.
+- CORS, rate limiting and request logging moved out of the hard-wired stack and
+  ship as plugins. Behaviour is unchanged with the default registry. Request
+  logging is now a hand-written layer rather than `TraceLayer`, with a header
+  allowlist that refuses credential headers at start-up rather than filtering
+  them at run time.
+- Credential endpoints became their own stage. They already carried a tighter
+  rate-limit bucket than the rest of the API; that is now a structural
+  distinction a plugin can target.
+
+### Fixed
+
+- Responses produced *above* the router carried none of the hardening headers.
+  Two cases: the 500 that `CatchPanicLayer` substitutes for a panicking stack,
+  and every rejection made before routing — a guard's, and path
+  canonicalisation's 404. The panic handler now sits below the headers, and the
+  request id and hardening are applied above the pre-routing checks as well.
