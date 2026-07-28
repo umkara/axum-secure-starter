@@ -12,7 +12,21 @@
 <div class="layout">
 
 <aside class="sidebar">
-  <p class="brand">Bastion</p>
+  <a class="brand" href="#overview">
+    <svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="markGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#c2703f"/>
+          <stop offset="1" stop-color="#8a3f21"/>
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="7" fill="url(#markGrad)"/>
+      <path fill="#fff" fill-rule="evenodd"
+            d="M4 6h5v3h4.5V6h5v3H23V6h5v20H4Z
+               M14.5 12h3v3h3v3h-3v5h-3v-5h-3v-3h3Z"/>
+    </svg>
+    <span class="brand-name">Bastion</span>
+  </a>
   <p class="brand-sub">docs for axum-secure-starter</p>
   <nav id="nav">
     <div class="nav-group">
@@ -36,12 +50,19 @@
       <a href="#csp">CSP &amp; headers</a>
     </div>
   </nav>
+  <a class="repo-link" href="https://github.com/umkara/axum-secure-starter">
+    <svg class="gh" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+    </svg>
+    <span>umkara/axum-secure-starter</span>
+  </a>
 </aside>
 
 <main>
 
 <section id="overview">
   <h1>Bastion</h1>
+  <div class="crenel" aria-hidden="true"></div>
   <p class="lede">
     Documentation for <strong>axum-secure-starter</strong> — a JSON API server in
     Rust that is hardened by default, and how to put any frontend in front of it.
@@ -58,6 +79,15 @@
     it in whatever you already use: vanilla JavaScript, TypeScript, React, Vue,
     Svelte, Next.js, Tailwind, or plain CSS.
   </p>
+  <div class="actions">
+    <a class="btn btn-primary" href="#quickstart">Run it in five commands</a>
+    <a class="btn" href="https://github.com/umkara/axum-secure-starter">
+      <svg class="gh" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/>
+      </svg>
+      Source on GitHub
+    </a>
+  </div>
 </section>
 
 <section id="quickstart">
@@ -1463,11 +1493,17 @@ x-request-id: &lt;uuid, echoed back for correlation&gt;</code></pre>
 </section>
 
 <footer>
+  <div class="crenel crenel-muted" aria-hidden="true"></div>
   <p>
     Bastion — documentation for
     <a href="https://github.com/umkara/axum-secure-starter">axum-secure-starter</a>.
     MIT licensed. Benchmarks measured on Apple M2, 8 cores; reproduce them with
     the commands in <a href="#performance">Performance</a>.
+  </p>
+  <p>
+    This page is one hand-written stylesheet and one module of JavaScript, served
+    by the server it documents, under the same
+    <a href="#csp">CSP</a> — no framework, no build step, no inline anything.
   </p>
 </footer>
 

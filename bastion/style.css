@@ -15,7 +15,13 @@
   --code-bg: #f6f5f3;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Headings are set in a book serif. It is the one typographic decision on the
+     page, it costs no network request, and it is why this does not look like
+     every other documentation site. */
+  --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --measure: 68ch;
+  --shadow: 0 1px 2px rgba(25, 25, 24, 0.04), 0 8px 24px -16px rgba(25, 25, 24, 0.28);
+  --on-accent: #fdf7f3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,8 +35,12 @@
     --accent-soft: #2a211c;
     --ok: #6fbf8e;
     --code-bg: #232220;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 28px -18px rgba(0, 0, 0, 0.8);
+    --on-accent: #1b1310;
   }
 }
+
+::selection { background: var(--accent-soft); color: var(--accent); }
 
 * { box-sizing: border-box; }
 
@@ -38,7 +48,9 @@ html { scroll-behavior: smooth; scroll-padding-top: 2rem; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* A single warm wash off the top-left corner, fixed so it never scrolls into
+     the text. Cheap, and it keeps the page from reading as flat white. */
+  background: var(--bg) radial-gradient(70ch 50ch at 8% -8%, var(--accent-soft), transparent 70%) fixed no-repeat;
   color: var(--ink);
   font: 16px/1.65 var(--sans);
   -webkit-font-smoothing: antialiased;
@@ -65,17 +77,58 @@ body {
 }
 
 .brand {
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  margin: 0 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+
+.mark {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 7px;
+  box-shadow: var(--shadow);
+}
+
+.brand-name {
+  font-family: var(--serif);
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .brand-sub {
   color: var(--muted);
   font-size: 13px;
   margin: 0 0 28px;
+  padding-left: 40px;
 }
+
+.repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 26px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.repo-link:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.gh { width: 16px; height: 16px; flex: none; }
 
 .nav-group { margin-bottom: 22px; }
 
@@ -88,7 +141,7 @@ body {
   margin: 0 0 8px;
 }
 
-.sidebar a {
+.sidebar nav a {
   display: block;
   padding: 4px 10px;
   margin-left: -10px;
@@ -98,8 +151,19 @@ body {
   border-radius: 6px;
 }
 
-.sidebar a:hover { background: var(--accent-soft); }
-.sidebar a.active { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
+.sidebar nav a {
+  border-left: 2px solid transparent;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.sidebar nav a:hover { background: var(--accent-soft); }
+
+.sidebar nav a.active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  color: var(--accent);
+  font-weight: 550;
+}
 
 /* ---------- content ---------- */
 
@@ -111,28 +175,112 @@ main {
 section { scroll-margin-top: 24px; margin-bottom: 64px; }
 
 h1 {
-  font-size: 40px;
-  line-height: 1.15;
-  letter-spacing: -0.03em;
-  margin: 0 0 12px;
+  font-family: var(--serif);
+  font-size: 46px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0 0 14px;
 }
 
 h2 {
-  font-size: 26px;
-  letter-spacing: -0.02em;
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   margin: 0 0 14px;
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--line);
+  /* The rule fades out rather than stopping dead at the column edge. */
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--line) 0%, var(--line) 55%, transparent 100%) 1;
 }
 
-h3 { font-size: 17px; margin: 28px 0 8px; }
+h3 {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  margin: 28px 0 8px;
+}
+
+/* The mark's crenellations, borrowed as a rule: three merlons over a baseline.
+   It appears exactly twice — under the title and above the footer — which is
+   what keeps it a signature rather than decoration. */
+.crenel {
+  height: 13px;
+  max-width: 232px;
+  margin: 0 0 22px;
+  background:
+    /* merlons, sitting directly on … */
+    repeating-linear-gradient(90deg, var(--accent) 0 26px, transparent 26px 44px) 0 0 / 100% 9px no-repeat,
+    /* … the wall. */
+    linear-gradient(var(--accent), var(--accent)) 0 100% / 100% 4px no-repeat;
+  opacity: 0.9;
+}
+
+.crenel-muted { opacity: 0.35; margin: 0 0 20px; }
 
 p, li { max-width: var(--measure); }
 p { margin: 0 0 14px; }
 
 .lede { font-size: 19px; color: var(--muted); max-width: var(--measure); }
 
-a { color: var(--accent); }
+a {
+  color: var(--accent);
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+a:hover { text-decoration-thickness: 2px; }
+
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* ---------- buttons ---------- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 22px 0 4px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14.5px;
+  font-weight: 550;
+  text-decoration: none;
+  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; scroll-behavior: auto !important; }
+  .btn:hover { transform: none; }
+}
 
 code {
   font-family: var(--mono);
@@ -149,10 +297,13 @@ pre {
   line-height: 1.6;
   background: var(--code-bg);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 15px 18px;
   overflow-x: auto;
   margin: 0 0 16px;
+  /* A hairline of accent down the gutter: enough to tie code to the palette,
+     not enough to compete with the text. */
+  border-left: 3px solid var(--accent-soft);
 }
 
 pre code { background: none; border: 0; padding: 0; font-size: inherit; }
@@ -182,9 +333,9 @@ td code { white-space: nowrap; }
 
 .note {
   border-left: 3px solid var(--accent);
-  background: var(--panel);
-  border-radius: 0 8px 8px 0;
-  padding: 12px 16px;
+  background: var(--accent-soft);
+  border-radius: 0 10px 10px 0;
+  padding: 13px 18px;
   margin: 0 0 18px;
   font-size: 15px;
   max-width: var(--measure);
@@ -232,8 +383,9 @@ td code { white-space: nowrap; }
 .metric {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
 }
 
 .metric .value {
@@ -241,6 +393,7 @@ td code { white-space: nowrap; }
   font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  color: var(--accent);
   display: block;
 }
 
@@ -257,12 +410,13 @@ td code { white-space: nowrap; }
 .bar-num { font-family: var(--mono); font-size: 13px; color: var(--muted); text-align: right; }
 
 footer {
-  border-top: 1px solid var(--line);
-  padding: 24px 0 40px;
+  padding: 8px 0 48px;
   color: var(--muted);
   font-size: 14px;
   max-width: var(--measure);
 }
+
+footer p { margin: 0 0 10px; }
 
 /* ---------- responsive ---------- */
 
@@ -271,6 +425,10 @@ footer {
   .sidebar { position: static; height: auto; padding: 28px 0 0; }
   .sidebar nav { display: flex; flex-wrap: wrap; gap: 4px; }
   .nav-group { margin-bottom: 8px; width: 100%; }
-  h1 { font-size: 32px; }
+  h1 { font-size: 34px; }
+  h2 { font-size: 24px; }
+  .brand-sub { padding-left: 0; }
+  .repo-link { margin-top: 16px; }
+  .actions .btn { flex: 1 1 auto; justify-content: center; }
   .bar-row { grid-template-columns: 130px minmax(0, 1fr) 70px; }
 }
