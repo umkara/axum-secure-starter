@@ -250,6 +250,7 @@ button:focus-visible {
 }
 
 .btn {
+  position: relative;   /* the tooltip anchors to this */
   display: inline-flex;
   align-items: center;
   gap: 8px;
