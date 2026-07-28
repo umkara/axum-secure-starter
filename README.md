@@ -9,8 +9,8 @@ Use it as the starting point for an API where accounts and sessions matter, or
 read it as a worked example of what "hardened" means in practice.
 
 ```bash
-git clone https://github.com/umkara/axum-secure-starter.git
-cd axum-secure-starter
+git clone https://github.com/umkara/bastion.git
+cd bastion
 cp .env.example .env
 sed -i '' "s|^APP_JWT_SECRET=.*|APP_JWT_SECRET=$(openssl rand -base64 48)|" .env
 mkdir -p data && cargo run
@@ -81,8 +81,8 @@ smuggling, path confusion, timing-based account enumeration, and login floods.
 **1. Get the code and create your configuration.**
 
 ```bash
-git clone https://github.com/umkara/axum-secure-starter.git
-cd axum-secure-starter
+git clone https://github.com/umkara/bastion.git
+cd bastion
 cp .env.example .env
 ```
 

@@ -1,6 +1,6 @@
 [Unit]
 Description=bastion
-Documentation=https://github.com/umkara/axum-secure-starter
+Documentation=https://github.com/umkara/bastion
 After=network-online.target
 Wants=network-online.target
 

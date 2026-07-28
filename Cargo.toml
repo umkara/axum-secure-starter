@@ -7,8 +7,8 @@ authors = ["Umit Karasu <umkarasu@gmail.com>"]
 description = "A security-hardened JSON API server in Rust: Argon2id credentials, rotating refresh tokens, per-IP and per-account rate limiting, and a bounded request/connection surface."
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/umkara/axum-secure-starter"
-homepage = "https://github.com/umkara/axum-secure-starter"
+repository = "https://github.com/umkara/bastion"
+homepage = "https://github.com/umkara/bastion"
 keywords = ["axum", "api", "authentication", "jwt", "security"]
 categories = ["web-programming::http-server", "authentication"]
 
