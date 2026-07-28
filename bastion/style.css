@@ -131,6 +131,43 @@ body {
 
 .gh { width: 16px; height: 16px; flex: none; }
 
+/* ---------- package manager switch ---------- */
+
+/* Built by app.js: it rewrites the commands, so without script it would be
+   four buttons that do nothing. */
+.pm-switch {
+  display: flex;
+  gap: 2px;
+  margin: 0 0 26px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.pm {
+  position: relative;   /* the tooltip anchors to this */
+  flex: 1;
+  appearance: none;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 4px 0;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.pm:hover { color: var(--ink); }
+
+.pm[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .nav-group { margin-bottom: 22px; }
 
 .nav-title {

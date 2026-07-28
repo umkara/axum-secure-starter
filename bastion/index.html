@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bastion — docs for axum-secure-starter</title>
 <meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, BetterAuth, and CSS frameworks.">
-<link rel="stylesheet" href="style.css?v=7">
-<link rel="icon" type="image/svg+xml" href="favicon.svg?v=7">
+<link rel="stylesheet" href="style.css?v=8">
+<link rel="icon" type="image/svg+xml" href="favicon.svg?v=8">
 </head>
 <body>
 <div class="layout">
@@ -907,7 +907,7 @@ export async function signOut() {
       you are missing. <code>examples/nextjs</code> in the repository is the same
       set assembled and running, if you would rather read it working:
     </p>
-<pre><code>cd examples/nextjs
+<pre data-pm="keep"><code>cd examples/nextjs
 pnpm install
 cp .env.example .env.local   # fill in the two secrets
 pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
@@ -956,8 +956,15 @@ pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
     unblocked, or the native binding is never compiled — and pin it to 12,
     because BetterAuth peer-requires <code>^12</code>:
   </p>
-<pre><code>// package.json
+<pre data-pm="keep"><code>// package.json
 "pnpm": { "onlyBuiltDependencies": ["better-sqlite3"] }</code></pre>
+  <p>
+    That block is pnpm's. npm and Yarn run install scripts by default and need
+    nothing; Bun blocks them the same way pnpm does and reads
+    <code>"trustedDependencies": ["better-sqlite3"]</code> instead. Whichever
+    you use, the symptom of getting it wrong is identical — a missing
+    <code>.node</code> binding at the first database call.
+  </p>
   <div class="scroll-x">
   <table>
     <thead><tr><th>Variable</th><th>Default</th><th>Notes</th></tr></thead>
@@ -1344,7 +1351,7 @@ export function acquireLease(input: {
     Then <code>pnpm dlx @better-auth/cli generate</code> for the tables. The
     example runs against Next 16.2 and better-auth 1.6.25:
   </p>
-<pre><code>cd examples/nextjs
+<pre data-pm="keep"><code>cd examples/nextjs
 pnpm install
 cp .env.example .env.local   # fill in the two secrets
 pnpm db:push &amp;&amp; pnpm db:seed &amp;&amp; pnpm dev</code></pre>
@@ -1512,6 +1519,6 @@ x-request-id: &lt;uuid, echoed back for correlation&gt;</code></pre>
 
 </main>
 </div>
-<script type="module" src="app.js?v=7"></script>
+<script type="module" src="app.js?v=8"></script>
 </body>
 </html>
