@@ -108,6 +108,7 @@ body {
 }
 
 .repo-link {
+  position: relative;   /* the tooltip anchors to this */
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -341,10 +342,18 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 .copy:hover { color: var(--accent); border-color: var(--accent); }
 .copy.copied { opacity: 1; color: var(--ok); border-color: var(--ok); }
 
-/* The tooltip, drawn from data-tip so app.js can change the wording without
-   touching the DOM twice. It sits to the left: the button is already at the
-   right edge of the column, and anything drawn outward would be clipped. */
-.copy::after {
+/* ---------- tooltips ---------- */
+
+/* Drawn from data-tip, so app.js can change a button's wording by setting one
+   attribute and static markup can opt in without any script at all. Default
+   direction is leftward, which is what the copy buttons need: they sit at the
+   right edge of the column and anything drawn outward would be clipped.
+   data-tip-pos="top" opens upward instead.
+
+   Positioning context is the host's own business — `.copy` is absolutely
+   placed inside its code block, so a blanket `position: relative` here would
+   move it. */
+[data-tip]::after {
   content: attr(data-tip);
   position: absolute;
   right: calc(100% + 8px);
@@ -366,8 +375,16 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
   transition: opacity 120ms ease;
 }
 
-.copy:hover::after,
-.copy:focus-visible::after,
+[data-tip-pos="top"]::after {
+  right: auto;
+  left: 50%;
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+}
+
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after,
 .copy.copied::after { opacity: 1; }
 
 .copy.copied::after { color: var(--ok); border-color: var(--ok); }
