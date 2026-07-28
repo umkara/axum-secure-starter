@@ -341,6 +341,37 @@ pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 .copy:hover { color: var(--accent); border-color: var(--accent); }
 .copy.copied { opacity: 1; color: var(--ok); border-color: var(--ok); }
 
+/* The tooltip, drawn from data-tip so app.js can change the wording without
+   touching the DOM twice. It sits to the left: the button is already at the
+   right edge of the column, and anything drawn outward would be clipped. */
+.copy::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.copy:hover::after,
+.copy:focus-visible::after,
+.copy.copied::after { opacity: 1; }
+
+.copy.copied::after { color: var(--ok); border-color: var(--ok); }
+
 /* No hover to reveal it on a touch screen, so leave it showing. */
 @media (hover: none) {
   .copy { opacity: 1; }

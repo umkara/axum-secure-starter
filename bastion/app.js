@@ -5,6 +5,9 @@
 // <script> blocks would simply not run. That is the point of the policy, and
 // this page lives within it like any frontend should.
 
+/** Only ever shown in the fallback, where the user has to press it themselves. */
+const COPY_KEY = /Mac|iP(hone|ad|od)/.test(navigator.platform || "") ? "⌘C" : "Ctrl+C";
+
 const CLIPBOARD_ICON =
   '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">' +
   '<path fill="currentColor" d="M10 1H4a2 2 0 0 0-2 2v8h1.5V3a.5.5 0 0 1 .5-.5h6V1Z"/>' +
@@ -35,6 +38,9 @@ function initCopyButtons() {
     button.className = "copy";
     button.innerHTML = CLIPBOARD_ICON;
     button.setAttribute("aria-label", "Copy code");
+    // The visible tooltip. A `title` would do the same job three seconds
+    // later and cannot be styled; the CSS draws this one from the attribute.
+    button.dataset.tip = "Copy";
     // Announces the outcome to a screen reader without moving focus.
     button.setAttribute("aria-live", "polite");
     wrapper.append(button);
@@ -59,12 +65,14 @@ function initCopyButtons() {
 
       button.innerHTML = ok ? CHECK_ICON : CLIPBOARD_ICON;
       button.setAttribute("aria-label", ok ? "Copied" : "Select and copy");
+      button.dataset.tip = ok ? "Copied" : `Press ${COPY_KEY}`;
       button.classList.toggle("copied", ok);
 
       clearTimeout(revert);
       revert = setTimeout(() => {
         button.innerHTML = CLIPBOARD_ICON;
         button.setAttribute("aria-label", "Copy code");
+        button.dataset.tip = "Copy";
         button.classList.remove("copied");
       }, 1800);
     });
