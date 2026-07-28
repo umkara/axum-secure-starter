@@ -308,6 +308,44 @@ pre {
 
 pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 
+/* ---------- copy buttons ---------- */
+
+/* The wrapper is created by app.js and carries the block's margin, so the
+   button can sit outside the scrolling area and stay put. */
+.code-block { position: relative; margin: 0 0 16px; }
+/* Room at the right so a long first line never runs under the button. */
+.code-block pre { margin: 0; padding-right: 48px; }
+
+.copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.code-block:hover .copy,
+.copy:focus { opacity: 1; }
+
+.copy:hover { color: var(--accent); border-color: var(--accent); }
+.copy.copied { opacity: 1; color: var(--ok); border-color: var(--ok); }
+
+/* No hover to reveal it on a touch screen, so leave it showing. */
+@media (hover: none) {
+  .copy { opacity: 1; }
+}
+
 /* ---------- tables ---------- */
 
 .scroll-x { overflow-x: auto; margin-bottom: 18px; }
