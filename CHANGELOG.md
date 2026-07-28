@@ -20,6 +20,18 @@ their history is in the git log.
   key is derived from `APP_JWT_SECRET` as `SHA-256(domain || secret)`, since
   v4.local needs exactly 32 bytes. Adds the `pasetors` dependency (v4 and std
   features only).
+- **PASETO v4.public** as a third format, `APP_TOKEN_FORMAT=paseto-public`.
+  Ed25519 signatures rather than a shared secret: the private key stays with the
+  server, the public key can be handed to anything that verifies, and a leak of
+  the verifying half forges nothing. The payload is signed rather than
+  encrypted, so claims are readable — `paseto-local` remains the choice when
+  that matters.
+- `APP_TOKEN_PRIVATE_KEY` and `APP_TOKEN_PUBLIC_KEY`, base64 in either alphabet,
+  padded or not, decoded and length-checked at start-up. Selecting
+  `paseto-public` without both stops the server.
+- `bastion --generate-token-keypair` prints a fresh pair as the environment
+  lines that use it. Handled before configuration is loaded, since the usual
+  reason to want a key is not having a configuration yet.
 - `tests/tokens.rs`: the same session driven end to end through every configured
   format, plus proof that a token written in one format does not authenticate
   against a server running the other — in both directions, with the same key,

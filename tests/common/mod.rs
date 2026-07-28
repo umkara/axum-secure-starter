@@ -117,6 +117,17 @@ pub async fn spawn() -> TestApp {
 
 pub async fn spawn_with(options: TestOptions) -> TestApp {
     let plugins = options.plugins;
+
+    // Formats that sign rather than share a secret need a key pair, and a test
+    // that asked for one should not also have to produce it. Fresh per server,
+    // so two spawned servers never accidentally trust each other's tokens.
+    let (token_private_key, token_public_key) = if options.token_format.needs_key_pair() {
+        let (private, public) =
+            bastion::security::paseto::generate_key_pair().expect("failed to generate a key pair");
+        (Some(private), Some(public))
+    } else {
+        (None, None)
+    };
     let tempdir = tempfile::tempdir().expect("failed to create a temporary directory");
     let db_path = tempdir.path().join("test.db");
 
@@ -142,6 +153,8 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
         },
         security: SecurityConfig {
             token_format: options.token_format,
+            token_private_key,
+            token_public_key,
             jwt_secret: TEST_JWT_SECRET.into(),
             jwt_issuer: TEST_JWT_ISSUER.into(),
             jwt_audience: TEST_JWT_AUDIENCE.into(),

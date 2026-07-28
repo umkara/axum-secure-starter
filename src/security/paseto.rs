@@ -35,10 +35,10 @@
 use std::time::Duration;
 
 use pasetors::{
-    Local,
+    Local, Public,
     claims::{Claims, ClaimsValidationRules},
-    keys::SymmetricKey,
-    local,
+    keys::{AsymmetricKeyPair, AsymmetricPublicKey, AsymmetricSecretKey, Generate, SymmetricKey},
+    local, public,
     token::UntrustedToken,
     version4::V4,
 };
@@ -105,18 +105,7 @@ impl TokenIssuer for PasetoLocalCodec {
     }
 
     fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
-        // Sets `iat` and `nbf` to now and `exp` to now + ttl.
-        let mut claims = Claims::new_expires_in(&self.ttl).map_err(internal)?;
-        claims.subject(&user_id.to_string()).map_err(internal)?;
-        claims.issuer(&self.issuer).map_err(internal)?;
-        claims.audience(&self.audience).map_err(internal)?;
-        claims
-            .token_identifier(&Uuid::new_v4().to_string())
-            .map_err(internal)?;
-        claims
-            .add_additional(ROLE_CLAIM, role.as_str())
-            .map_err(internal)?;
-
+        let claims = claims_for(user_id, role, &self.issuer, &self.audience, self.ttl)?;
         local::encrypt(&self.key, &claims, None, None).map_err(internal)
     }
 
@@ -131,24 +120,146 @@ impl TokenIssuer for PasetoLocalCodec {
         let trusted = local::decrypt(&self.key, &untrusted, &self.validation_rules(), None, None)
             .map_err(|_| AppError::Unauthorized)?;
 
-        let claims = trusted.payload_claims().ok_or(AppError::Unauthorized)?;
-
-        let user_id = claims
-            .get_claim("sub")
-            .and_then(|value| value.as_str())
-            .ok_or(AppError::Unauthorized)?
-            .parse::<Uuid>()
-            .map_err(|_| AppError::Unauthorized)?;
-
-        let role = claims
-            .get_claim(ROLE_CLAIM)
-            .and_then(|value| value.as_str())
-            .ok_or(AppError::Unauthorized)?
-            .parse::<Role>()
-            .map_err(|_| AppError::Unauthorized)?;
-
-        Ok(TokenIdentity { user_id, role })
+        identity_from(trusted.payload_claims().ok_or(AppError::Unauthorized)?)
     }
+}
+
+/// Access tokens as PASETO v4.public: Ed25519 signatures.
+///
+/// The difference from [`PasetoLocalCodec`] is who can do what. A shared secret
+/// lets every holder both mint and verify, so a resource server that only needs
+/// to check tokens has to be trusted to issue them too. A key pair splits that:
+/// the private key stays here, the public key can be handed to anything that
+/// verifies, and a leak of the verifying half forges nothing.
+///
+/// The payload is signed, not encrypted — claims are readable, as in a JWT.
+/// That is inherent to the purpose: a verifier that cannot read the token
+/// cannot act on it.
+pub(crate) struct PasetoPublicCodec {
+    signing: AsymmetricSecretKey<V4>,
+    verifying: AsymmetricPublicKey<V4>,
+    issuer: String,
+    audience: String,
+    ttl: Duration,
+}
+
+impl PasetoPublicCodec {
+    /// # Panics
+    ///
+    /// If the key pair is absent or the wrong length. Neither is reachable:
+    /// [`crate::config`] refuses to produce a configuration naming this format
+    /// without a decoded, length-checked pair, and that refusal is what stops
+    /// the server.
+    pub fn new(config: &SecurityConfig) -> Self {
+        let private = config
+            .token_private_key
+            .as_deref()
+            .expect("paseto-public requires a private key; config validates this");
+        let public = config
+            .token_public_key
+            .as_deref()
+            .expect("paseto-public requires a public key; config validates this");
+
+        Self {
+            signing: AsymmetricSecretKey::<V4>::from(private)
+                .expect("a 64-byte key is a valid v4.public signing key"),
+            verifying: AsymmetricPublicKey::<V4>::from(public)
+                .expect("a 32-byte key is a valid v4.public verifying key"),
+            issuer: config.jwt_issuer.clone(),
+            audience: config.jwt_audience.clone(),
+            ttl: config.access_token_ttl,
+        }
+    }
+
+    fn validation_rules(&self) -> ClaimsValidationRules {
+        let mut rules = ClaimsValidationRules::new();
+        rules.validate_issuer_with(&self.issuer);
+        rules.validate_audience_with(&self.audience);
+        rules
+    }
+}
+
+impl TokenIssuer for PasetoPublicCodec {
+    fn ttl_seconds(&self) -> i64 {
+        self.ttl.as_secs() as i64
+    }
+
+    fn issue(&self, user_id: Uuid, role: Role) -> AppResult<String> {
+        let claims = claims_for(user_id, role, &self.issuer, &self.audience, self.ttl)?;
+        public::sign(&self.signing, &claims, None, None).map_err(internal)
+    }
+
+    fn verify(&self, token: &str) -> AppResult<TokenIdentity> {
+        let untrusted =
+            UntrustedToken::<Public, V4>::try_from(token).map_err(|_| AppError::Unauthorized)?;
+
+        let trusted = public::verify(
+            &self.verifying,
+            &untrusted,
+            &self.validation_rules(),
+            None,
+            None,
+        )
+        .map_err(|_| AppError::Unauthorized)?;
+
+        identity_from(trusted.payload_claims().ok_or(AppError::Unauthorized)?)
+    }
+}
+
+/// A fresh Ed25519 key pair as raw bytes: the 64-byte private key and the
+/// 32-byte public one.
+///
+/// Exists because the alternative is telling operators to extract a raw seed
+/// from a PEM file, which is the kind of instruction that gets a public key
+/// pasted into the private slot.
+pub fn generate_key_pair() -> AppResult<(Vec<u8>, Vec<u8>)> {
+    let pair = AsymmetricKeyPair::<V4>::generate().map_err(internal)?;
+    Ok((
+        pair.secret.as_bytes().to_vec(),
+        pair.public.as_bytes().to_vec(),
+    ))
+}
+
+/// The claims both PASETO codecs put in a token. One function so the two cannot
+/// drift into carrying different things.
+fn claims_for(
+    user_id: Uuid,
+    role: Role,
+    issuer: &str,
+    audience: &str,
+    ttl: Duration,
+) -> AppResult<Claims> {
+    // Sets `iat` and `nbf` to now and `exp` to now + ttl.
+    let mut claims = Claims::new_expires_in(&ttl).map_err(internal)?;
+    claims.subject(&user_id.to_string()).map_err(internal)?;
+    claims.issuer(issuer).map_err(internal)?;
+    claims.audience(audience).map_err(internal)?;
+    claims
+        .token_identifier(&Uuid::new_v4().to_string())
+        .map_err(internal)?;
+    claims
+        .add_additional(ROLE_CLAIM, role.as_str())
+        .map_err(internal)?;
+    Ok(claims)
+}
+
+/// Reads the identity out of claims that have already been validated.
+fn identity_from(claims: &Claims) -> AppResult<TokenIdentity> {
+    let user_id = claims
+        .get_claim("sub")
+        .and_then(|value| value.as_str())
+        .ok_or(AppError::Unauthorized)?
+        .parse::<Uuid>()
+        .map_err(|_| AppError::Unauthorized)?;
+
+    let role = claims
+        .get_claim(ROLE_CLAIM)
+        .and_then(|value| value.as_str())
+        .ok_or(AppError::Unauthorized)?
+        .parse::<Role>()
+        .map_err(|_| AppError::Unauthorized)?;
+
+    Ok(TokenIdentity { user_id, role })
 }
 
 /// Minting failures are ours, not the client's: a claim that will not serialise
@@ -165,6 +276,8 @@ mod tests {
     fn config(secret: &str) -> SecurityConfig {
         SecurityConfig {
             token_format: crate::config::TokenFormat::PasetoLocal,
+            token_private_key: None,
+            token_public_key: None,
             jwt_secret: secret.into(),
             jwt_issuer: "bastion-tests".into(),
             jwt_audience: "bastion-tests-api".into(),
@@ -268,6 +381,110 @@ mod tests {
             codec.verify(&jwt).is_err(),
             "a token of another format must not authenticate anybody"
         );
+    }
+
+    fn public_config(keys: &(Vec<u8>, Vec<u8>)) -> SecurityConfig {
+        SecurityConfig {
+            token_format: crate::config::TokenFormat::PasetoPublic,
+            token_private_key: Some(keys.0.clone()),
+            token_public_key: Some(keys.1.clone()),
+            ..config(SECRET)
+        }
+    }
+
+    #[test]
+    fn a_signed_token_round_trips_and_announces_its_version() {
+        let keys = generate_key_pair().unwrap();
+        let codec = PasetoPublicCodec::new(&public_config(&keys));
+        let user = Uuid::new_v4();
+
+        let token = codec.issue(user, Role::User).unwrap();
+        assert!(token.starts_with("v4.public."), "{token}");
+
+        let identity = codec.verify(&token).unwrap();
+        assert_eq!(identity.user_id, user);
+        assert_eq!(identity.role, Role::User);
+    }
+
+    #[test]
+    fn verifying_needs_only_the_public_half() {
+        let minting = generate_key_pair().unwrap();
+        let unrelated = generate_key_pair().unwrap();
+
+        let issuer = PasetoPublicCodec::new(&public_config(&minting));
+
+        // A verifier that holds the minting public key but somebody else's
+        // private key still accepts the token. That is the whole point of the
+        // format: verification is not evidence of the ability to mint.
+        let verifier = PasetoPublicCodec::new(&public_config(&(unrelated.0, minting.1.clone())));
+
+        let token = issuer.issue(Uuid::new_v4(), Role::Admin).unwrap();
+        assert!(verifier.verify(&token).is_ok());
+    }
+
+    #[test]
+    fn a_token_signed_by_another_key_pair_is_refused() {
+        let ours = PasetoPublicCodec::new(&public_config(&generate_key_pair().unwrap()));
+        let theirs = PasetoPublicCodec::new(&public_config(&generate_key_pair().unwrap()));
+
+        let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
+        assert!(ours.verify(&token).is_err());
+    }
+
+    #[test]
+    fn the_signed_payload_is_readable_and_that_is_expected() {
+        let keys = generate_key_pair().unwrap();
+        let codec = PasetoPublicCodec::new(&public_config(&keys));
+        let user = Uuid::new_v4();
+
+        let token = codec.issue(user, Role::Admin).unwrap();
+
+        // Signed, not encrypted: the claims are legible, as in a JWT. A
+        // verifier that cannot read a token cannot act on it, so this is
+        // inherent to the purpose rather than a shortcoming — but it is the
+        // reason not to reach for this format when the claims are sensitive.
+        let payload = token.trim_start_matches("v4.public.");
+        let decoded = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            payload.split('.').next().unwrap(),
+        )
+        .unwrap();
+        let text = String::from_utf8_lossy(&decoded);
+        assert!(
+            text.contains(&user.to_string()) && text.contains("admin"),
+            "the claims are meant to be readable here: {text}"
+        );
+    }
+
+    #[test]
+    fn a_local_token_is_not_a_public_one() {
+        let keys = generate_key_pair().unwrap();
+        let signed = PasetoPublicCodec::new(&public_config(&keys));
+        let encrypted = PasetoLocalCodec::new(&config(SECRET));
+
+        let local = encrypted.issue(Uuid::new_v4(), Role::Admin).unwrap();
+        assert!(
+            signed.verify(&local).is_err(),
+            "the purpose is part of the token, and it is checked"
+        );
+
+        let public = signed.issue(Uuid::new_v4(), Role::Admin).unwrap();
+        assert!(encrypted.verify(&public).is_err());
+    }
+
+    #[test]
+    fn a_generated_pair_is_the_length_the_format_requires() {
+        let (private, public) = generate_key_pair().unwrap();
+
+        // The config validator checks these lengths on the way in; if
+        // generation ever produced something else, the server would refuse the
+        // keys it had just printed.
+        assert_eq!(private.len(), 64);
+        assert_eq!(public.len(), 32);
+
+        // Two calls must not produce the same key.
+        let (other_private, _) = generate_key_pair().unwrap();
+        assert_ne!(private, other_private);
     }
 
     #[test]

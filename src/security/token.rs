@@ -53,6 +53,7 @@ pub fn issuer_for(config: &SecurityConfig) -> Arc<dyn TokenIssuer> {
     match config.token_format {
         TokenFormat::Jwt => Arc::new(super::jwt::JwtCodec::new(config)),
         TokenFormat::PasetoLocal => Arc::new(super::paseto::PasetoLocalCodec::new(config)),
+        TokenFormat::PasetoPublic => Arc::new(super::paseto::PasetoPublicCodec::new(config)),
     }
 }
 
@@ -63,18 +64,34 @@ mod tests {
 
     /// Every format the factory can build. A new arm in `issuer_for` without a
     /// new entry here is a format nothing tests.
-    const FORMATS: [TokenFormat; 2] = [TokenFormat::Jwt, TokenFormat::PasetoLocal];
+    const FORMATS: [TokenFormat; 3] = [
+        TokenFormat::Jwt,
+        TokenFormat::PasetoLocal,
+        TokenFormat::PasetoPublic,
+    ];
 
-    fn config_for(format: TokenFormat, secret: &str) -> SecurityConfig {
+    /// A configuration carrying whatever key material the format needs: the
+    /// shared secret for the symmetric formats, the supplied pair for the
+    /// asymmetric one. Passing the pair in rather than generating it here is
+    /// what lets a test hold the key material still and vary only the format.
+    fn config_for(format: TokenFormat, secret: &str, keys: &(Vec<u8>, Vec<u8>)) -> SecurityConfig {
         SecurityConfig {
             token_format: format,
+            token_private_key: Some(keys.0.clone()),
+            token_public_key: Some(keys.1.clone()),
             ..config(secret)
         }
+    }
+
+    fn key_pair() -> (Vec<u8>, Vec<u8>) {
+        crate::security::paseto::generate_key_pair().unwrap()
     }
 
     fn config(secret: &str) -> SecurityConfig {
         SecurityConfig {
             token_format: TokenFormat::Jwt,
+            token_private_key: None,
+            token_public_key: None,
             jwt_secret: secret.into(),
             jwt_issuer: "bastion-tests".into(),
             jwt_audience: "bastion-tests-api".into(),
@@ -90,10 +107,13 @@ mod tests {
 
     #[test]
     fn every_format_round_trips_through_the_trait() {
+        let keys = key_pair();
+
         for format in FORMATS {
             let issuer = issuer_for(&config_for(
                 format,
                 "a-secret-long-enough-for-the-validator",
+                &keys,
             ));
             let user = Uuid::new_v4();
 
@@ -109,13 +129,17 @@ mod tests {
     #[test]
     fn no_format_accepts_a_token_built_from_another_key() {
         for format in FORMATS {
+            // Different key material on both sides, whichever kind the format
+            // uses: a different shared secret, or a different key pair.
             let ours = issuer_for(&config_for(
                 format,
                 "a-secret-long-enough-for-the-validator",
+                &key_pair(),
             ));
             let theirs = issuer_for(&config_for(
                 format,
                 "a-different-secret-of-sufficient-length",
+                &key_pair(),
             ));
 
             let token = theirs.issue(Uuid::new_v4(), Role::Admin).unwrap();
@@ -129,15 +153,17 @@ mod tests {
     #[test]
     fn no_format_accepts_a_token_written_in_another_one() {
         let secret = "a-secret-long-enough-for-the-validator";
+        let keys = key_pair();
 
         for ours in FORMATS {
-            let issuer = issuer_for(&config_for(ours, secret));
+            let issuer = issuer_for(&config_for(ours, secret, &keys));
 
             for theirs in FORMATS.into_iter().filter(|other| *other != ours) {
-                // Same key, same issuer, same audience: only the format
-                // differs. Switching APP_TOKEN_FORMAT must invalidate the
-                // tokens already in circulation rather than half-accept them.
-                let foreign = issuer_for(&config_for(theirs, secret))
+                // Same key material, same issuer, same audience: only the
+                // format differs. Switching APP_TOKEN_FORMAT must invalidate
+                // the tokens already in circulation rather than half-accept
+                // them.
+                let foreign = issuer_for(&config_for(theirs, secret, &keys))
                     .issue(Uuid::new_v4(), Role::Admin)
                     .unwrap();
 

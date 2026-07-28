@@ -14,8 +14,34 @@ use tokio::signal;
 /// How often expired refresh tokens are swept out of the database.
 const TOKEN_CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+/// Prints a fresh Ed25519 key pair as the two environment lines that use it.
+///
+/// Written to stdout in the shape you paste, rather than as prose about which
+/// half goes where: pasting the public key into the private slot is the mistake
+/// worth designing out.
+fn print_token_key_pair() -> anyhow::Result<()> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let (private, public) = bastion::security::paseto::generate_key_pair()
+        .context("failed to generate an Ed25519 key pair")?;
+
+    println!("# PASETO v4.public key pair. Keep the private key secret.");
+    println!("APP_TOKEN_FORMAT=paseto-public");
+    println!("APP_TOKEN_PRIVATE_KEY={}", STANDARD.encode(private));
+    println!("APP_TOKEN_PUBLIC_KEY={}", STANDARD.encode(public));
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // The one thing this binary does other than serve. Handled before anything
+    // is loaded, because generating a key must not require a working
+    // configuration — the usual reason to want one is that you do not have a
+    // configuration yet.
+    if std::env::args().any(|arg| arg == "--generate-token-keypair") {
+        return print_token_key_pair();
+    }
+
     // A missing .env is fine; real deployments inject the environment directly.
     let _ = dotenvy::dotenv();
 

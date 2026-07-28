@@ -18,7 +18,11 @@ const PASSWORD: &str = "correct horse battery staple";
 /// Every format the server can be configured with. A format added to
 /// `TokenFormat` without an entry here is a format nothing exercises end to
 /// end.
-const FORMATS: [TokenFormat; 2] = [TokenFormat::Jwt, TokenFormat::PasetoLocal];
+const FORMATS: [TokenFormat; 3] = [
+    TokenFormat::Jwt,
+    TokenFormat::PasetoLocal,
+    TokenFormat::PasetoPublic,
+];
 
 async fn spawn_with_format(format: TokenFormat) -> common::TestApp {
     spawn_with(TestOptions {
@@ -112,6 +116,40 @@ async fn a_missing_or_malformed_token_is_refused_the_same_way_by_every_format() 
             assert_eq!(body["error"]["code"], "unauthorized", "{format}");
         }
     }
+}
+
+#[tokio::test]
+async fn a_signed_token_is_accepted_by_the_server_that_minted_it_and_no_other() {
+    // Each spawned server generates its own key pair, so these two share an
+    // issuer and audience and differ only in key material — the situation a
+    // second deployment of the same service is in.
+    let ours = spawn_with_format(TokenFormat::PasetoPublic).await;
+    let theirs = spawn_with_format(TokenFormat::PasetoPublic).await;
+
+    let (access, _) = register_and_login(&ours, "signed@example.com", PASSWORD).await;
+    assert!(access.starts_with("v4.public."), "{access}");
+
+    let accepted = ours
+        .client
+        .get(ours.url("/api/v1/notes"))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
+
+    let refused = theirs
+        .client
+        .get(theirs.url("/api/v1/notes"))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        401,
+        "another key pair must not accept this signature"
+    );
 }
 
 #[tokio::test]

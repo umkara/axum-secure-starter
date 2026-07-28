@@ -69,12 +69,22 @@ pub enum TokenFormat {
     /// PASETO v4.local: XChaCha20-Poly1305, with the version rather than a
     /// header deciding the cryptography, and an encrypted payload.
     PasetoLocal,
+    /// PASETO v4.public: Ed25519 signatures. Anyone holding the public key can
+    /// verify a token; only the holder of the private key can mint one.
+    PasetoPublic,
 }
 
 impl TokenFormat {
     /// The accepted spellings, for error messages. Keep in step with
     /// [`TokenFormat::from_str`].
-    const SUPPORTED: &'static str = "`jwt`, `paseto-local`";
+    const SUPPORTED: &'static str = "`jwt`, `paseto-local`, `paseto-public`";
+
+    /// Whether this format is signed with a key pair rather than a shared
+    /// secret, and so needs [`SecurityConfig::token_private_key`] and
+    /// [`SecurityConfig::token_public_key`].
+    pub fn needs_key_pair(self) -> bool {
+        matches!(self, TokenFormat::PasetoPublic)
+    }
 }
 
 impl std::fmt::Display for TokenFormat {
@@ -82,6 +92,7 @@ impl std::fmt::Display for TokenFormat {
         match self {
             TokenFormat::Jwt => f.write_str("jwt"),
             TokenFormat::PasetoLocal => f.write_str("paseto-local"),
+            TokenFormat::PasetoPublic => f.write_str("paseto-public"),
         }
     }
 }
@@ -96,6 +107,7 @@ impl FromStr for TokenFormat {
             // the moment the public variant lands, and a deployment should not
             // silently change which one it runs when that happens.
             "paseto-local" | "v4.local" => Ok(TokenFormat::PasetoLocal),
+            "paseto-public" | "v4.public" => Ok(TokenFormat::PasetoPublic),
             other => Err(format!(
                 "expected one of {}, got `{other}`",
                 TokenFormat::SUPPORTED
@@ -178,6 +190,13 @@ pub struct SecurityConfig {
     /// How access tokens are written and read. Refresh tokens are unaffected —
     /// they are opaque and server-side whatever this says.
     pub token_format: TokenFormat,
+    /// Ed25519 signing key, 64 raw bytes, for the formats that sign rather than
+    /// share a secret. Decoded and length-checked at start-up, so a codec built
+    /// from it can treat it as valid.
+    pub token_private_key: Option<Vec<u8>>,
+    /// Ed25519 verifying key, 32 raw bytes. Safe to publish — that is the point
+    /// of the format that uses it.
+    pub token_public_key: Option<Vec<u8>>,
     pub jwt_secret: String,
     pub jwt_issuer: String,
     pub jwt_audience: String,
@@ -283,8 +302,34 @@ impl SecurityConfig {
             });
         }
 
+        let token_format: TokenFormat = parse_or("APP_TOKEN_FORMAT", TokenFormat::default())?;
+
+        // Decoded and measured here rather than where they are used: a key that
+        // is the wrong length should stop the server, not the first login.
+        let token_private_key = key_bytes(
+            "APP_TOKEN_PRIVATE_KEY",
+            ED25519_PRIVATE_KEY_LEN,
+            "an Ed25519 private key",
+        )?;
+        let token_public_key = key_bytes(
+            "APP_TOKEN_PUBLIC_KEY",
+            ED25519_PUBLIC_KEY_LEN,
+            "an Ed25519 public key",
+        )?;
+
+        if token_format.needs_key_pair() {
+            if token_private_key.is_none() {
+                return Err(ConfigError::Missing("APP_TOKEN_PRIVATE_KEY"));
+            }
+            if token_public_key.is_none() {
+                return Err(ConfigError::Missing("APP_TOKEN_PUBLIC_KEY"));
+            }
+        }
+
         Ok(Self {
-            token_format: parse_or("APP_TOKEN_FORMAT", TokenFormat::default())?,
+            token_format,
+            token_private_key,
+            token_public_key,
             jwt_secret,
             jwt_issuer: env::var("APP_JWT_ISSUER").unwrap_or_else(|_| "bastion".into()),
             jwt_audience: env::var("APP_JWT_AUDIENCE").unwrap_or_else(|_| "bastion-api".into()),
@@ -371,6 +416,74 @@ impl AppConfig {
     }
 }
 
+/// Raw Ed25519 key lengths. The private form is the seed followed by the public
+/// key, which is what PASETO v4.public expects and what `ed25519` libraries
+/// generally hand out.
+const ED25519_PRIVATE_KEY_LEN: usize = 64;
+const ED25519_PUBLIC_KEY_LEN: usize = 32;
+
+/// Reads a base64 key of an exact length.
+///
+/// Accepts standard and URL-safe alphabets, padded or not, because a key gets
+/// copied between a terminal, a secret manager and a deployment manifest, and
+/// which of those re-encodes it is not the operator's problem to remember.
+fn key_bytes(
+    name: &'static str,
+    expected: usize,
+    what: &str,
+) -> Result<Option<Vec<u8>>, ConfigError> {
+    let Some(raw) = env::var(name).ok().map(|value| value.trim().to_owned()) else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+
+    decode_key(name, &raw, expected, what).map(Some)
+}
+
+/// The decoding half of [`key_bytes`], split out so it can be tested without
+/// touching the process environment.
+fn decode_key(
+    name: &'static str,
+    raw: &str,
+    expected: usize,
+    what: &str,
+) -> Result<Vec<u8>, ConfigError> {
+    use base64::{
+        Engine,
+        engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    };
+
+    let decoded = [
+        STANDARD.decode(raw),
+        STANDARD_NO_PAD.decode(raw),
+        URL_SAFE.decode(raw),
+        URL_SAFE_NO_PAD.decode(raw),
+    ]
+    .into_iter()
+    .find_map(Result::ok)
+    .ok_or(ConfigError::Invalid {
+        name,
+        reason: "must be base64".into(),
+    })?;
+
+    if decoded.len() != expected {
+        // The length is the only check worth making here: it catches the two
+        // mistakes that actually happen — pasting the wrong half of a key pair,
+        // and pasting a PEM instead of raw bytes.
+        return Err(ConfigError::Invalid {
+            name,
+            reason: format!(
+                "must decode to {expected} bytes ({what}), got {}",
+                decoded.len()
+            ),
+        });
+    }
+
+    Ok(decoded)
+}
+
 /// Reads a duration given in whole seconds.
 fn seconds(name: &'static str, default: u64) -> Result<Duration, ConfigError> {
     Ok(Duration::from_secs(parse_or(name, default)?))
@@ -409,6 +522,70 @@ mod tests {
         for raw in ["jwt", "JWT", "  Jwt  "] {
             assert_eq!(raw.parse::<TokenFormat>().unwrap(), TokenFormat::Jwt);
         }
+    }
+
+    #[test]
+    fn a_key_is_read_in_whichever_base64_alphabet_it_arrives_in() {
+        use base64::{
+            Engine,
+            engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+        };
+
+        // Bytes that encode differently in the two alphabets, so this would
+        // pass by accident if only one were tried.
+        let key: Vec<u8> = (0..32u8).map(|byte| byte.wrapping_mul(9)).collect();
+
+        for encoded in [
+            STANDARD.encode(&key),
+            STANDARD_NO_PAD.encode(&key),
+            URL_SAFE.encode(&key),
+            URL_SAFE_NO_PAD.encode(&key),
+        ] {
+            let decoded = decode_key("APP_TOKEN_PUBLIC_KEY", &encoded, 32, "a key")
+                .unwrap_or_else(|error| panic!("`{encoded}` was refused: {error}"));
+            assert_eq!(decoded, key);
+        }
+    }
+
+    #[test]
+    fn a_key_of_the_wrong_length_is_refused_with_both_lengths_named() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        // The mistake this catches is pasting the public key into the private
+        // slot, which is a valid base64 string of the wrong size.
+        let public_half = STANDARD.encode([7u8; 32]);
+
+        let rejected = decode_key(
+            "APP_TOKEN_PRIVATE_KEY",
+            &public_half,
+            64,
+            "an Ed25519 private key",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(rejected.contains("64"), "{rejected}");
+        assert!(rejected.contains("32"), "{rejected}");
+    }
+
+    #[test]
+    fn something_that_is_not_base64_is_refused() {
+        let rejected = decode_key(
+            "APP_TOKEN_PUBLIC_KEY",
+            "-----BEGIN PRIVATE KEY-----",
+            32,
+            "a key",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rejected.contains("base64"), "{rejected}");
+    }
+
+    #[test]
+    fn only_the_signing_formats_need_a_key_pair() {
+        assert!(TokenFormat::PasetoPublic.needs_key_pair());
+        assert!(!TokenFormat::Jwt.needs_key_pair());
+        assert!(!TokenFormat::PasetoLocal.needs_key_pair());
     }
 
     #[test]

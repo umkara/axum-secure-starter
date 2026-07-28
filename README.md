@@ -65,7 +65,7 @@ request logging and four pre-routing guards ship as [plugins](#middleware-plugin
 A plugin can only add; it cannot remove, replace or reorder a core protection,
 and that is enforced by the types rather than by review.
 
-**Tests that prove it.** 123 of them, including 31 that actively attack the
+**Tests that prove it.** 142 of them, including 31 that actively attack the
 server — SQL injection, forged and downgraded JWTs, privilege escalation,
 request smuggling, path confusion, timing-based account enumeration, login
 floods — and 23 that attack the plugin system with plugins written to break it.
@@ -373,6 +373,7 @@ The full list with comments is in [`.env.example`](.env.example).
 | --- | --- |
 | `jwt` *(default)* | HS256 JWT, pinned to one algorithm, issuer and audience |
 | `paseto-local` | PASETO v4.local — XChaCha20-Poly1305, encrypted payload |
+| `paseto-public` | PASETO v4.public — Ed25519 signatures, readable payload |
 
 An unknown value stops the server. A deployment that asked for one format and
 silently got another is the mistake this setting exists to prevent.
@@ -386,9 +387,34 @@ definition of the version, with no field an attacker can edit. The payload is
 also encrypted rather than merely signed, so a user id and role are not legible
 to anything that handles the token.
 
-Both formats use `APP_JWT_SECRET`. PASETO v4.local needs exactly 32 bytes, so
-the key is derived as `SHA-256(domain || secret)` with a domain string that
-makes it unusable as any other key.
+**`paseto-public`** signs instead of encrypting, which changes who can do what.
+A shared secret lets every holder both mint and verify, so a service that only
+needs to check tokens has to be trusted to issue them too. A key pair splits
+that: the private key stays with this server, the public key goes to anything
+that verifies, and a leak of the verifying half forges nothing. The payload is
+readable, as in a JWT — a verifier that cannot read a token cannot act on it —
+so choose `paseto-local` instead when the claims themselves are sensitive.
+
+It needs an Ed25519 key pair. Generate one:
+
+```bash
+cargo run -- --generate-token-keypair
+```
+
+That prints the three lines to paste into `.env`. Keep the private key secret;
+the public key is meant to be handed out. Both are base64, in either alphabet,
+padded or not — the server refuses anything that is not exactly 64 and 32 bytes,
+which is what catches a public key pasted into the private slot.
+
+`jwt` and `paseto-local` use `APP_JWT_SECRET`. PASETO v4.local needs exactly 32
+bytes, so its key is derived as `SHA-256(domain || secret)` with a domain string
+that makes it unusable as any other key.
+
+| Variable | Needed by |
+| --- | --- |
+| `APP_JWT_SECRET` | `jwt`, `paseto-local` |
+| `APP_TOKEN_PRIVATE_KEY` | `paseto-public` — 64 bytes, base64 |
+| `APP_TOKEN_PUBLIC_KEY` | `paseto-public` — 32 bytes, base64 |
 
 **Switching format invalidates every access token in circulation.** They fail
 closed — a token in the old format is refused, not half-accepted — and clients
@@ -623,7 +649,7 @@ keeps that true while still letting you add to it.
 cargo test
 ```
 
-123 tests across five groups:
+142 tests across five groups:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
