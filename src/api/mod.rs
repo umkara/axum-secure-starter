@@ -134,26 +134,25 @@ pub fn build_router(state: AppState, plugins: &Plugins) -> Router {
     // a header has it written back on the way out, because these layers set
     // theirs with `overriding`.
     let hardening = ServiceBuilder::new()
-        // A panicking handler — or a panicking plugin — becomes a 500 instead
-        // of a dropped connection.
-        .layer(CatchPanicLayer::new())
         // Correlates log lines across a request, and echoes the id back.
         .layer(SetRequestIdLayer::new(REQUEST_ID_HEADER, MakeRequestUuid))
         .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER))
+        // Above the panic handler, so the substitute 500 it returns is hardened
+        // and correlatable like any other response. The layers above this point
+        // only copy a header or write a constant; a panic in one of them is not
+        // a state this server can reach, and putting the catch above them would
+        // trade that impossibility for a real gap.
+        .layer(SecurityHeaders::hardening())
+        // A panicking handler — or a panicking plugin — becomes a 500 instead
+        // of a dropped connection.
+        .layer(CatchPanicLayer::new())
         // Above every plugin on purpose: this is what keeps credentials out of
         // anything downstream that prints headers, including a logging plugin.
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,
             header::COOKIE,
             header::PROXY_AUTHORIZATION,
-        ]))
-        .layer(SecurityHeaders::hsts())
-        .layer(SecurityHeaders::no_sniff())
-        .layer(SecurityHeaders::frame_options())
-        .layer(SecurityHeaders::referrer_policy())
-        .layer(SecurityHeaders::permissions_policy())
-        .layer(SecurityHeaders::cross_origin_resource_policy())
-        .layer(SecurityHeaders::cross_origin_opener_policy());
+        ]));
 
     // The availability controls. `HandleErrorLayer` stays welded directly above
     // the load shedder: put anything between them and a shed request becomes an

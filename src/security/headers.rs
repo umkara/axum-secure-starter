@@ -5,6 +5,7 @@
 //! a new endpoint cannot be shipped without them.
 
 use axum::http::{HeaderName, HeaderValue, Response, header};
+use tower::util::MapResponseLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 
 /// A JSON API serves no HTML, scripts, or frames, so the policy can deny
@@ -28,6 +29,45 @@ const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000; includeSubDomains; pr
 /// attached to. Named so the layer's type stays readable.
 pub type CachePolicy<B> = fn(&Response<B>) -> Option<HeaderValue>;
 
+/// The headers that belong on every response, whatever produced it.
+///
+/// Data rather than a stack of layers, because a layer can only reach responses
+/// the router produced. Rejections made *above* the router — a pre-routing
+/// filter's, path canonicalisation's — and the substitute response
+/// `CatchPanicLayer` returns are all responses a layer inside the router never
+/// sees, and they need these headers just as much.
+///
+/// Branch-specific headers are deliberately absent: the content security policy
+/// differs between the API and served pages, and `Cache-Control` between the
+/// API and static assets. Applying either from here would clobber the other.
+const ALWAYS: [(HeaderName, HeaderValue); 7] = [
+    (
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static(STRICT_TRANSPORT_SECURITY),
+    ),
+    (
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    ),
+    (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+    (
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    ),
+    (
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static(PERMISSIONS_POLICY),
+    ),
+    (
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
+    ),
+    (
+        HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    ),
+];
+
 macro_rules! static_header {
     ($name:expr, $value:expr) => {
         SetResponseHeaderLayer::overriding($name, HeaderValue::from_static($value))
@@ -42,37 +82,29 @@ impl SecurityHeaders {
         static_header!(header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY)
     }
 
-    pub fn no_sniff() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+    /// Writes [`ALWAYS`] onto a response, overriding whatever is there.
+    ///
+    /// Public because it is the only way to harden a response produced outside
+    /// a router — and because a caller that assembles its own stack should not
+    /// have to re-derive this list to match.
+    /// Generic over the body because it is applied in two places whose body
+    /// types differ: `CatchPanicLayer` boxes the body it passes on, and the
+    /// copy above the router still sees the plain one.
+    pub fn harden<B>(mut response: Response<B>) -> Response<B> {
+        let headers = response.headers_mut();
+        for (name, value) in ALWAYS {
+            headers.insert(name, value);
+        }
+        response
     }
 
-    pub fn frame_options() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(header::X_FRAME_OPTIONS, "DENY")
-    }
-
-    pub fn referrer_policy() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(header::REFERRER_POLICY, "no-referrer")
-    }
-
-    pub fn permissions_policy() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(
-            HeaderName::from_static("permissions-policy"),
-            PERMISSIONS_POLICY
-        )
-    }
-
-    pub fn cross_origin_resource_policy() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(
-            HeaderName::from_static("cross-origin-resource-policy"),
-            "same-origin"
-        )
-    }
-
-    pub fn cross_origin_opener_policy() -> SetResponseHeaderLayer<HeaderValue> {
-        static_header!(
-            HeaderName::from_static("cross-origin-opener-policy"),
-            "same-origin"
-        )
+    /// [`SecurityHeaders::harden`] as a layer.
+    ///
+    /// One layer writing seven headers rather than seven layers writing one
+    /// each: the same work, one less service in the stack, and — the reason it
+    /// changed — a form that can also be applied above the router.
+    pub fn hardening<B>() -> MapResponseLayer<fn(Response<B>) -> Response<B>> {
+        MapResponseLayer::new(Self::harden as fn(Response<B>) -> Response<B>)
     }
 
     /// Responses are per-user; caching them anywhere shared is a data leak.

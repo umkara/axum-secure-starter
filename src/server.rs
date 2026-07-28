@@ -18,13 +18,15 @@ use axum_server::{
 use hyper::{Request, body::Incoming};
 use hyper_util::rt::TokioTimer;
 use tokio::io::{AsyncRead, AsyncWrite};
-use tower::Layer;
+use tower::{Layer, ServiceBuilder};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
 use crate::{
     api::path::CanonicalPathLayer,
     config::AppConfig,
     net::ConnectionLimitAcceptor,
     plugin::{Registry, RequestFilterLayer},
+    security::headers::SecurityHeaders,
     state::AppState,
 };
 
@@ -56,8 +58,25 @@ pub async fn serve(
     // Pre-routing filters sit above canonicalisation so they see the URI the
     // client actually sent — and because they can only reject, canonicalisation
     // still runs underneath whatever they decide.
-    let app = RequestFilterLayer::new(plugins.filters())
-        .layer(CanonicalPathLayer.layer(crate::api::build_router(state, &plugins)));
+    //
+    // The request id and the hardening headers are repeated above them, because
+    // both of these layers answer requests the router never sees: a filter's
+    // rejection and canonicalisation's 404 would otherwise be the only
+    // responses this server sends without them. Repeating is safe and cheap —
+    // `SetRequestIdLayer` leaves an id that is already present alone, and the
+    // headers are written to the same constants either way. It is also
+    // deliberate that the router keeps its own copy: `build_router` is public,
+    // and an embedder calling it directly must not get a weaker stack than the
+    // one that ships.
+    let app = ServiceBuilder::new()
+        .layer(SetRequestIdLayer::new(
+            crate::api::REQUEST_ID_HEADER,
+            MakeRequestUuid,
+        ))
+        .layer(PropagateRequestIdLayer::new(crate::api::REQUEST_ID_HEADER))
+        .layer(SecurityHeaders::hardening())
+        .layer(RequestFilterLayer::new(plugins.filters()))
+        .service(CanonicalPathLayer.layer(crate::api::build_router(state, &plugins)));
     let make_service = ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
         SocketAddr,
     >(app);
