@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Produces dist/axum-secure-starter, an aarch64 Linux binary for the Oracle A1
+# Produces dist/bastion, an aarch64 Linux binary for the Oracle A1
 # shape.
 #
 # Default is a native arm64 container build (an Apple Silicon Mac and an Ampere
@@ -67,7 +67,7 @@ else
     --exclude '/target' --exclude '/dist' --exclude '/data' \
     --exclude '/.git' --exclude '/.env' \
     -e "$ssh_cmd" \
-    ./ "$host:axum-secure-starter-src/"
+    ./ "$host:bastion-src/"
 
   ssh "${ssh_args[@]+"${ssh_args[@]}"}" "$host" bash -seu <<'REMOTE'
 if ! command -v cargo >/dev/null 2>&1; then
@@ -77,15 +77,15 @@ if ! command -v cargo >/dev/null 2>&1; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 fi
 . "$HOME/.cargo/env"
-cd ~/axum-secure-starter-src
+cd ~/bastion-src
 cargo build --release --locked
 REMOTE
 
   scp "${ssh_args[@]+"${ssh_args[@]}"}" \
-    "$host:axum-secure-starter-src/target/release/axum-secure-starter" \
-    dist/axum-secure-starter
+    "$host:bastion-src/target/release/bastion" \
+    dist/bastion
 fi
 
-chmod +x dist/axum-secure-starter
-echo "==> dist/axum-secure-starter"
-file dist/axum-secure-starter 2>/dev/null || ls -l dist/axum-secure-starter
+chmod +x dist/bastion
+echo "==> dist/bastion"
+file dist/bastion 2>/dev/null || ls -l dist/bastion

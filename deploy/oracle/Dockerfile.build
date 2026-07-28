@@ -34,4 +34,4 @@ RUN touch src/main.rs src/lib.rs \
 # Debian bookworm carries glibc 2.36; Ubuntu 24.04 carries 2.39. Building
 # against the older one keeps the binary loadable on the newer host.
 FROM scratch AS artifact
-COPY --from=build /src/target/release/axum-secure-starter /axum-secure-starter
+COPY --from=build /src/target/release/bastion /bastion

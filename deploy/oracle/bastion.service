@@ -1,5 +1,5 @@
 [Unit]
-Description=axum-secure-starter
+Description=bastion
 Documentation=https://github.com/umkara/axum-secure-starter
 After=network-online.target
 Wants=network-online.target
@@ -8,12 +8,12 @@ Wants=network-online.target
 Type=exec
 User=axum
 Group=axum
-ExecStart=/opt/axum-secure-starter/bin/axum-secure-starter
-WorkingDirectory=/var/lib/axum-secure-starter
+ExecStart=/opt/bastion/bin/bastion
+WorkingDirectory=/var/lib/bastion
 
 # Secrets live here, not in the unit: `systemctl show` and the journal would
 # otherwise expose the signing key.
-EnvironmentFile=/etc/axum-secure-starter/env
+EnvironmentFile=/etc/bastion/env
 
 Restart=on-failure
 RestartSec=2s
@@ -43,7 +43,7 @@ ProtectKernelLogs=true
 ProtectControlGroups=true
 ProtectHostname=true
 ProtectClock=true
-ReadWritePaths=/var/lib/axum-secure-starter
+ReadWritePaths=/var/lib/bastion
 # AF_UNIX is not used for listening; it is here because journald's stdout
 # forwarding and glibc's resolver both reach for it.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

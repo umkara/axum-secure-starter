@@ -229,9 +229,8 @@ impl SecurityConfig {
 
         Ok(Self {
             jwt_secret,
-            jwt_issuer: env::var("APP_JWT_ISSUER").unwrap_or_else(|_| "axum-secure-starter".into()),
-            jwt_audience: env::var("APP_JWT_AUDIENCE")
-                .unwrap_or_else(|_| "axum-secure-starter-api".into()),
+            jwt_issuer: env::var("APP_JWT_ISSUER").unwrap_or_else(|_| "bastion".into()),
+            jwt_audience: env::var("APP_JWT_AUDIENCE").unwrap_or_else(|_| "bastion-api".into()),
             access_token_ttl: seconds("APP_ACCESS_TOKEN_TTL_SECS", 900)?,
             refresh_token_ttl: seconds("APP_REFRESH_TOKEN_TTL_SECS", 60 * 60 * 24 * 14)?,
             max_concurrent_hashes: parse_or(

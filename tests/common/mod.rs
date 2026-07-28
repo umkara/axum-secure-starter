@@ -8,7 +8,8 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use axum_secure_starter::{
+use axum_server::Handle;
+use bastion::{
     config::{
         AppConfig, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig, SecurityConfig,
         ServerConfig,
@@ -19,15 +20,14 @@ use axum_secure_starter::{
     service::AuthService,
     state::AppState,
 };
-use axum_server::Handle;
 use serde_json::Value;
 use tempfile::TempDir;
 
 /// The signing key the harness configures. Attack tests use it to forge
 /// tokens that are correctly signed but otherwise malformed.
 pub const TEST_JWT_SECRET: &str = "test-secret-that-is-long-enough-to-pass-validation";
-pub const TEST_JWT_ISSUER: &str = "axum-secure-starter-tests";
-pub const TEST_JWT_AUDIENCE: &str = "axum-secure-starter-tests-api";
+pub const TEST_JWT_ISSUER: &str = "bastion-tests";
+pub const TEST_JWT_AUDIENCE: &str = "bastion-tests-api";
 
 pub struct TestApp {
     pub base_url: String,

@@ -24,11 +24,11 @@ forged with `X-Forwarded-For`.
 | --- | --- |
 | `cloud-init.yaml` | Instance first-boot: packages, service account, directories, host firewall, renewal hook |
 | `Dockerfile.build` | Native `linux/arm64` build container |
-| `build.sh` | Produces `dist/axum-secure-starter` |
+| `build.sh` | Produces `dist/bastion` |
 | `issue-cert.sh` | First Let's Encrypt certificate |
 | `deploy.sh` | Build, upload, restart, verify |
-| `axum-secure-starter.service` | Hardened systemd unit |
-| `env.production.example` | Template for `/etc/axum-secure-starter/env` |
+| `bastion.service` | Hardened systemd unit |
+| `env.production.example` | Template for `/etc/bastion/env` |
 
 ## Before you start
 
@@ -143,18 +143,18 @@ deploy/oracle/deploy.sh --host ubuntu@<ip> --env deploy/oracle/env.production --
 
 ```bash
 # logs
-ssh ubuntu@<ip> sudo journalctl -u axum-secure-starter -f
+ssh ubuntu@<ip> sudo journalctl -u bastion -f
 
 # ship a code change
 deploy/oracle/deploy.sh --host ubuntu@<ip> --domain example.com
 
 # back up the database (SQLite, so this must not be a plain file copy)
-ssh ubuntu@<ip> "sudo -u axum sqlite3 /var/lib/axum-secure-starter/app.db \
+ssh ubuntu@<ip> "sudo -u axum sqlite3 /var/lib/bastion/app.db \
   \".backup '/tmp/app-backup.db'\"" && scp ubuntu@<ip>:/tmp/app-backup.db .
 ```
 
 Renewal is unattended: `certbot.timer` renews, the deploy hook copies the new
-certificate into `/etc/axum-secure-starter/certs` and restarts the service,
+certificate into `/etc/bastion/certs` and restarts the service,
 which re-reads it at start-up.
 
 ## Known limits

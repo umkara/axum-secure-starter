@@ -1,4 +1,4 @@
-# axum-secure-starter
+# Bastion
 
 A JSON API server in Rust, built to be secure by default rather than secure by
 reminder. Registration, login, session rotation, and a small CRUD resource, with
@@ -349,7 +349,7 @@ Invalid configuration stops the server rather than failing open later.
 | `APP_SHUTDOWN_GRACE_SECS` | `20` | Drain time on `SIGTERM` |
 
 **Logging:** `APP_LOG` takes `tracing` filter syntax, for example
-`info,axum_secure_starter=debug`. Production emits JSON; development emits
+`info,bastion=debug`. Production emits JSON; development emits
 human-readable output.
 
 The full list with comments is in [`.env.example`](.env.example).
@@ -402,7 +402,7 @@ Build an optimised binary:
 cargo build --release
 ```
 
-The result is `target/release/axum-secure-starter`: a single executable with no
+The result is `target/release/bastion`: a single executable with no
 runtime dependencies beyond libc. Migrations are compiled into it and applied on
 start-up, so the `migrations/` directory does not need to ship alongside.
 

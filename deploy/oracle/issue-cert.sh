@@ -66,9 +66,9 @@ sudo certbot certonly \
 # certbot runs /etc/letsencrypt/renewal-hooks/deploy/* itself, but only when it
 # actually issues. Running it here makes a no-op re-run still publish the files.
 sudo env RENEWED_LINEAGE="/etc/letsencrypt/live/$DOMAIN" \
-  /etc/letsencrypt/renewal-hooks/deploy/50-axum-secure-starter
+  /etc/letsencrypt/renewal-hooks/deploy/50-bastion
 
-sudo ls -l /etc/axum-secure-starter/certs
+sudo ls -l /etc/bastion/certs
 REMOTE
 
 echo "==> certificate installed; run deploy.sh next"

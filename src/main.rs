@@ -4,11 +4,11 @@
 use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
-use axum_secure_starter::{
+use axum_server::Handle;
+use bastion::{
     config::AppConfig, db, repository::Repositories, server, service::AdminBootstrap,
     state::AppState, telemetry,
 };
-use axum_server::Handle;
 use tokio::signal;
 
 /// How often expired refresh tokens are swept out of the database.
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         concurrent_hashes = config.security.max_concurrent_hashes,
         hash_memory_ceiling_mib = config.security.max_concurrent_hashes
-            * axum_secure_starter::security::password::MEMORY_PER_HASH_BYTES
+            * bastion::security::password::MEMORY_PER_HASH_BYTES
             / (1024 * 1024),
         "password hashing admission limit"
     );

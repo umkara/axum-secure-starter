@@ -46,27 +46,27 @@ write_files:
   # Renewal runs unattended, so the new certificate has to reach the service
   # without a human copying files. certbot's own directory is root-only; this
   # publishes a copy the service account can read.
-  - path: /etc/letsencrypt/renewal-hooks/deploy/50-axum-secure-starter
+  - path: /etc/letsencrypt/renewal-hooks/deploy/50-bastion
     permissions: '0755'
     content: |
       #!/bin/sh
       set -eu
-      dest=/etc/axum-secure-starter/certs
+      dest=/etc/bastion/certs
       install -m 0644 -o root -g axum "$RENEWED_LINEAGE/fullchain.pem" "$dest/fullchain.pem"
       install -m 0640 -o root -g axum "$RENEWED_LINEAGE/privkey.pem" "$dest/privkey.pem"
       # The server reads its certificate once, at start-up. On the very first
       # issuance the unit is not installed yet, and a failing hook would make
       # certbot report failure for a certificate it successfully obtained.
-      if systemctl is-enabled --quiet axum-secure-starter.service 2>/dev/null; then
-        systemctl restart axum-secure-starter.service
+      if systemctl is-enabled --quiet bastion.service 2>/dev/null; then
+        systemctl restart bastion.service
       fi
 
 runcmd:
   - [ /usr/local/sbin/open-web-ports ]
-  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/axum-secure-starter/bin ]
-  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/axum-secure-starter/bastion ]
-  - [ install, -d, -o, axum, -g, axum, -m, '0750', /var/lib/axum-secure-starter ]
-  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/axum-secure-starter ]
-  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/axum-secure-starter/certs ]
+  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/bastion/bin ]
+  - [ install, -d, -o, root, -g, root, -m, '0755', /opt/bastion/docs ]
+  - [ install, -d, -o, axum, -g, axum, -m, '0750', /var/lib/bastion ]
+  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/bastion ]
+  - [ install, -d, -o, root, -g, axum, -m, '0750', /etc/bastion/certs ]
   # certbot renews on a timer; renewal binds :80 briefly in standalone mode.
   - [ systemctl, enable, --now, certbot.timer ]

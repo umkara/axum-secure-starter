@@ -180,43 +180,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-secure-starter"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "argon2",
- "async-trait",
- "axum",
- "axum-server",
- "base64 0.23.0",
- "chrono",
- "dotenvy",
- "futures-util",
- "hex",
- "hyper",
- "hyper-util",
- "jsonwebtoken",
- "rand 0.10.2",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx",
- "subtle",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tower_governor",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "validator",
-]
-
-[[package]]
 name = "axum-server"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -255,6 +218,43 @@ name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
+name = "bastion"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "axum",
+ "axum-server",
+ "base64 0.23.0",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "jsonwebtoken",
+ "rand 0.10.2",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tower_governor",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "validator",
+]
 
 [[package]]
 name = "bitflags"

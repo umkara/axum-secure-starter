@@ -11,7 +11,7 @@ use crate::config::Environment;
 pub fn init(environment: Environment) {
     let filter = EnvFilter::try_from_env("APP_LOG").unwrap_or_else(|_| {
         // `tower_http=debug` gives one line per request without being noisy.
-        EnvFilter::new("info,axum_secure_starter=info,tower_http=info,sqlx=warn")
+        EnvFilter::new("info,bastion=info,tower_http=info,sqlx=warn")
     });
 
     let registry = tracing_subscriber::registry().with(filter);

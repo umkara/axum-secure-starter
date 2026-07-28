@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bastion — docs for axum-secure-starter</title>
-<meta name="description" content="Documentation for axum-secure-starter: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, BetterAuth, and CSS frameworks.">
-<link rel="stylesheet" href="style.css?v=8">
-<link rel="icon" type="image/svg+xml" href="favicon.svg?v=8">
+<title>Bastion — a hardened JSON API server in Rust</title>
+<meta name="description" content="Documentation for Bastion: a security-hardened JSON API server in Rust. Quickstart, measured performance, and integration guides for vanilla JS, TypeScript, React, Vue, Svelte, Next.js, BetterAuth, and CSS frameworks.">
+<link rel="stylesheet" href="style.css?v=9">
+<link rel="icon" type="image/svg+xml" href="favicon.svg?v=9">
 </head>
 <body>
 <div class="layout">
@@ -27,7 +27,7 @@
     </svg>
     <span class="brand-name">Bastion</span>
   </a>
-  <p class="brand-sub">docs for axum-secure-starter</p>
+  <p class="brand-sub">a hardened JSON API server in Rust</p>
   <nav id="nav">
     <div class="nav-group">
       <p class="nav-title">Start</p>
@@ -65,8 +65,8 @@
   <h1>Bastion</h1>
   <div class="crenel" aria-hidden="true"></div>
   <p class="lede">
-    Documentation for <strong>axum-secure-starter</strong> — a JSON API server in
-    Rust that is hardened by default, and how to put any frontend in front of it.
+    <strong>Bastion</strong> is a JSON API server in Rust that is hardened by
+    default. This is how to run it, and how to put any frontend in front of it.
   </p>
   <p>
     The server handles accounts, sessions, and a small CRUD resource. It hashes
@@ -205,7 +205,7 @@ curl -X POST http://127.0.0.1:8443/api/v1/auth/login \
   <h3>Reproduce it</h3>
 <pre><code>cargo build --release
 APP_RATE_LIMIT_BURST=1000000 APP_AUTH_RATE_LIMIT_BURST=1000000 \
-  ./target/release/axum-secure-starter
+  ./target/release/bastion
 
 ab -k -c 50 -n 20000 http://127.0.0.1:8443/health/live
 ab -k -c 50 -n 20000 -H "authorization: Bearer $TOKEN" \
@@ -1519,6 +1519,6 @@ x-request-id: &lt;uuid, echoed back for correlation&gt;</code></pre>
 
 </main>
 </div>
-<script type="module" src="app.js?v=8"></script>
+<script type="module" src="app.js?v=9"></script>
 </body>
 </html>
