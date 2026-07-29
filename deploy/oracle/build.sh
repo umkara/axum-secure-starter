@@ -63,9 +63,26 @@ else
 
   # --locked needs Cargo.lock, and the build needs the migrations directory
   # because sqlx::migrate! embeds it at compile time.
+  #
+  # Secrets must not ride along. cargo needs none of them, and anything sent
+  # here lands in the login user's home directory — outside the 0640 root:axum
+  # that /etc/bastion/env gets, and readable by anyone who reaches that account.
+  # env.production holds the signing key; deploy.sh installs it over its own
+  # connection, so the build has no reason to see it. `/.env` was anchored at
+  # the root and so never covered examples/nextjs/.env.local; `.env*` unanchored
+  # does, and the --include ahead of it keeps the committed .env.example files.
+  #
+  # node_modules is excluded because it is most of the bytes and none of the
+  # build: the Rust compile does not read it.
+  #
+  # --delete does not remove a file that is excluded, so a copy left behind by
+  # an older revision of this script has to be deleted by hand.
   rsync -az --delete \
     --exclude '/target' --exclude '/dist' --exclude '/data' \
-    --exclude '/.git' --exclude '/.env' \
+    --exclude '/.git' \
+    --include '.env.example' --exclude '.env*' \
+    --exclude 'node_modules/' \
+    --exclude '/deploy/oracle/env.production' \
     -e "$ssh_cmd" \
     ./ "$host:bastion-src/"
 
