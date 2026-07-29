@@ -8,7 +8,7 @@ description = "A security-hardened JSON API server in Rust: Argon2id credentials
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/umkara/bastion"
-homepage = "https://github.com/umkara/bastion"
+homepage = "https://bastionrs.dev"
 keywords = ["axum", "api", "authentication", "jwt", "security"]
 categories = ["web-programming::http-server", "authentication"]
 
