@@ -177,8 +177,111 @@ impl std::fmt::Debug for BootstrapAdmin {
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
     pub url: String,
+    /// Derived from the url scheme at start-up, so nothing downstream has to
+    /// re-parse the url or guess. A url naming a backend this binary was not
+    /// built with is a configuration error, caught here.
+    pub backend: Backend,
     pub max_connections: u32,
     pub acquire_timeout: Duration,
+}
+
+/// Which storage backend a database url selects.
+///
+/// The set is closed on purpose. A backend is a compiled-in implementation of
+/// the persistence ports, so "which backends exist" is a fact about the binary
+/// and belongs in a type the compiler can check exhaustively — a store the
+/// server does not know how to open should not be expressible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Sqlite,
+    Postgres,
+    MySql,
+    Mongo,
+}
+
+impl Backend {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Backend::Sqlite => "sqlite",
+            Backend::Postgres => "postgres",
+            Backend::MySql => "mysql",
+            Backend::Mongo => "mongodb",
+        }
+    }
+
+    /// The cargo feature that compiles this backend in. Named in the error a
+    /// misconfigured deployment gets, so the fix is in the message.
+    pub const fn feature(self) -> &'static str {
+        match self {
+            Backend::Sqlite => "sqlite",
+            Backend::Postgres => "postgres",
+            Backend::MySql => "mysql",
+            Backend::Mongo => "mongodb",
+        }
+    }
+
+    /// Whether this binary carries the driver.
+    pub const fn is_compiled(self) -> bool {
+        match self {
+            Backend::Sqlite => cfg!(feature = "sqlite"),
+            Backend::Postgres => cfg!(feature = "postgres"),
+            Backend::MySql => cfg!(feature = "mysql"),
+            Backend::Mongo => cfg!(feature = "mongodb"),
+        }
+    }
+
+    /// Reads the backend out of a connection url's scheme.
+    ///
+    /// A url with no scheme is rejected rather than assumed to be a SQLite
+    /// path. Guessing would mean a typo in `APP_DATABASE_URL` silently starts a
+    /// server against an empty local file instead of the production database it
+    /// was meant to reach.
+    pub fn from_url(url: &str) -> Result<Self, ConfigError> {
+        let invalid = |reason: String| ConfigError::Invalid {
+            name: "APP_DATABASE_URL",
+            reason,
+        };
+
+        let scheme = url
+            .split_once("://")
+            .map(|(scheme, _)| scheme)
+            // `sqlite:app.db` is as valid as `sqlite://app.db`.
+            .or_else(|| url.split_once(':').map(|(scheme, _)| scheme))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "`{url}` has no scheme; expected one of sqlite://, postgres://, mysql://, mongodb://"
+                ))
+            })?
+            .to_ascii_lowercase();
+
+        let backend = match scheme.as_str() {
+            "sqlite" => Backend::Sqlite,
+            "postgres" | "postgresql" => Backend::Postgres,
+            "mysql" | "mariadb" => Backend::MySql,
+            "mongodb" | "mongodb+srv" => Backend::Mongo,
+            other => {
+                return Err(invalid(format!(
+                    "unsupported scheme `{other}`; expected one of sqlite, postgres, mysql, mongodb"
+                )));
+            }
+        };
+
+        if !backend.is_compiled() {
+            return Err(invalid(format!(
+                "the url selects the {} backend, but this binary was built without the `{}` feature",
+                backend.as_str(),
+                backend.feature()
+            )));
+        }
+
+        Ok(backend)
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -273,9 +376,12 @@ impl TlsConfig {
 
 impl DatabaseConfig {
     fn from_env() -> Result<Self, ConfigError> {
+        let url = env::var("APP_DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite://data/app.db?mode=rwc".to_string());
+
         Ok(Self {
-            url: env::var("APP_DATABASE_URL")
-                .unwrap_or_else(|_| "sqlite://data/app.db?mode=rwc".to_string()),
+            backend: Backend::from_url(&url)?,
+            url,
             max_connections: parse_or("APP_DATABASE_MAX_CONNECTIONS", 16u32)?,
             acquire_timeout: seconds("APP_DATABASE_ACQUIRE_TIMEOUT_SECS", 5)?,
         })
@@ -517,6 +623,74 @@ mod tests {
     // Parsing is tested directly rather than through the environment: under
     // edition 2024 `set_var` is unsafe, and a test that sets a variable while
     // other tests run in parallel is racy.
+
+    #[test]
+    fn the_url_scheme_picks_the_backend() {
+        // Only the backends this build carries can be asserted to parse: the
+        // check for a missing driver is part of `from_url`, so a test naming
+        // every scheme would fail on a single-backend build.
+        for (url, expected) in [
+            ("sqlite://data/app.db?mode=rwc", Backend::Sqlite),
+            ("sqlite:app.db", Backend::Sqlite),
+            ("postgres://user:pass@host/db", Backend::Postgres),
+            ("postgresql://user:pass@host/db", Backend::Postgres),
+            ("mysql://user:pass@host/db", Backend::MySql),
+            ("mariadb://user:pass@host/db", Backend::MySql),
+            ("mongodb://host:27017/db", Backend::Mongo),
+            ("mongodb+srv://cluster.example/db", Backend::Mongo),
+            // The scheme is the only thing read, and case does not matter.
+            ("POSTGRES://user@host/db", Backend::Postgres),
+        ] {
+            if !expected.is_compiled() {
+                continue;
+            }
+            assert_eq!(Backend::from_url(url).unwrap(), expected, "for `{url}`");
+        }
+    }
+
+    #[test]
+    fn a_url_with_no_scheme_is_refused_rather_than_read_as_a_path() {
+        // Guessing SQLite here would let a typo in APP_DATABASE_URL start the
+        // server against an empty local file instead of the production database
+        // it was meant to reach — a silent success, which is the worst outcome
+        // available.
+        let rejected = Backend::from_url("data/app.db").unwrap_err();
+        assert!(
+            format!("{rejected}").contains("no scheme"),
+            "the error must say what is wrong: {rejected}"
+        );
+
+        let unsupported = Backend::from_url("redis://localhost").unwrap_err();
+        assert!(
+            format!("{unsupported}").contains("unsupported scheme"),
+            "the error must say what is wrong: {unsupported}"
+        );
+    }
+
+    #[test]
+    fn a_backend_that_is_not_compiled_in_names_the_missing_feature() {
+        // The whole point of failing here rather than later: the operator is
+        // told which build flag to add, at start-up, instead of meeting a
+        // connection error at the first request.
+        for backend in [
+            Backend::Sqlite,
+            Backend::Postgres,
+            Backend::MySql,
+            Backend::Mongo,
+        ] {
+            if backend.is_compiled() {
+                continue;
+            }
+
+            let url = format!("{}://host/db", backend.as_str());
+            let rejected = Backend::from_url(&url).unwrap_err();
+            let message = format!("{rejected}");
+            assert!(
+                message.contains(backend.feature()),
+                "the error must name the feature that would fix it: {message}"
+            );
+        }
+    }
 
     #[test]
     fn the_token_format_defaults_to_the_one_every_earlier_version_issued() {

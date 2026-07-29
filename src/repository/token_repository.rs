@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::repository::error::RepositoryResult;
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RefreshTokenRecord {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -66,86 +65,4 @@ pub trait TokenRepository: Send + Sync + 'static {
 pub trait ExpiredTokenSweeper: Send + Sync + 'static {
     /// Drops rows that can no longer be redeemed. Returns how many went.
     async fn delete_expired(&self, now: DateTime<Utc>) -> RepositoryResult<u64>;
-}
-
-const TOKEN_COLUMNS: &str =
-    "id, user_id, token_hash, family, expires_at, used_at, revoked, created_at";
-
-pub struct SqliteTokenRepository {
-    pool: SqlitePool,
-}
-
-impl SqliteTokenRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl TokenRepository for SqliteTokenRepository {
-    async fn insert(&self, token: NewRefreshToken) -> RepositoryResult<()> {
-        sqlx::query(
-            "INSERT INTO refresh_tokens (id, user_id, token_hash, family, expires_at, revoked, created_at)
-             VALUES (?, ?, ?, ?, ?, 0, ?)",
-        )
-        .bind(token.id)
-        .bind(token.user_id)
-        .bind(token.token_hash)
-        .bind(token.family)
-        .bind(token.expires_at)
-        .bind(Utc::now())
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn find_by_hash(&self, token_hash: &str) -> RepositoryResult<Option<RefreshTokenRecord>> {
-        let row = sqlx::query_as::<_, RefreshTokenRecord>(&format!(
-            "SELECT {TOKEN_COLUMNS} FROM refresh_tokens WHERE token_hash = ?"
-        ))
-        .bind(token_hash)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row)
-    }
-
-    async fn mark_used(&self, id: Uuid) -> RepositoryResult<bool> {
-        // The `used_at IS NULL` guard is what makes redemption single-shot:
-        // two concurrent refreshes with the same token cannot both match.
-        let result = sqlx::query(
-            "UPDATE refresh_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL AND revoked = 0",
-        )
-        .bind(Utc::now())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() == 1)
-    }
-
-    async fn revoke_family(&self, family: Uuid) -> RepositoryResult<()> {
-        sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE family = ?")
-            .bind(family)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn revoke_all_for_user(&self, user_id: Uuid) -> RepositoryResult<()> {
-        sqlx::query("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?")
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl ExpiredTokenSweeper for SqliteTokenRepository {
-    async fn delete_expired(&self, now: DateTime<Utc>) -> RepositoryResult<u64> {
-        let result = sqlx::query("DELETE FROM refresh_tokens WHERE expires_at < ?")
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
 }

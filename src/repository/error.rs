@@ -23,16 +23,7 @@ pub enum RepositoryError {
     Backend(#[from] anyhow::Error),
 }
 
-impl From<sqlx::Error> for RepositoryError {
-    fn from(err: sqlx::Error) -> Self {
-        match &err {
-            // The database is the real arbiter of uniqueness: services check
-            // first, but that check and the write are two steps, and under
-            // concurrency only the constraint decides.
-            sqlx::Error::Database(cause) if cause.is_unique_violation() => {
-                RepositoryError::Conflict
-            }
-            _ => RepositoryError::Backend(anyhow::Error::new(err).context("database failure")),
-        }
-    }
-}
+// Each backend converts its own driver's errors into this vocabulary — the SQL
+// family in `repository::sql`, the document store in `repository::mongo`. That
+// is what keeps this file free of any driver: adding a backend adds a
+// conversion beside the backend, not a variant here.

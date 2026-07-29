@@ -1,7 +1,6 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
@@ -56,23 +55,27 @@ pub trait UserRepository: Send + Sync + 'static {
     async fn set_role(&self, id: Uuid, role: Role) -> RepositoryResult<()>;
 }
 
-// `updated_at` is written on every mutation but never read back: nothing in the
-// domain depends on it, so selecting it would only mean carrying a field around.
-const USER_COLUMNS: &str =
-    "id, email, password_hash, role, failed_attempts, locked_until, created_at";
-
-/// The SQLite shape of an account. `role` is TEXT here and a [`Role`] in the
-/// domain, which is the whole reason this type exists: the encoding belongs to
-/// the store, and the conversion is allowed to fail.
-#[derive(FromRow)]
-struct UserRow {
-    id: Uuid,
-    email: String,
-    password_hash: String,
-    role: String,
-    failed_attempts: i64,
-    locked_until: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
+/// The stored shape of an account, before it is a [`User`].
+///
+/// Every backend produces one of these and then converts. `role` is a string
+/// here and a [`Role`] in the domain, which is the whole reason the type
+/// exists: the encoding belongs to the store, and the conversion is allowed to
+/// fail.
+///
+/// `updated_at` is written on every mutation but never read back — nothing in
+/// the domain depends on it — so it is not a field here.
+///
+/// The `FromRow` derive is generic over the driver, so one row type serves
+/// SQLite, PostgreSQL and MySQL; the document backend fills it in by hand.
+#[derive(sqlx::FromRow)]
+pub(crate) struct UserRow {
+    pub id: Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub role: String,
+    pub failed_attempts: i64,
+    pub locked_until: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl TryFrom<UserRow> for User {
@@ -96,108 +99,5 @@ impl TryFrom<UserRow> for User {
             locked_until: row.locked_until,
             created_at: row.created_at,
         })
-    }
-}
-
-pub struct SqliteUserRepository {
-    pool: SqlitePool,
-}
-
-impl SqliteUserRepository {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
-    }
-}
-
-#[async_trait]
-impl UserRepository for SqliteUserRepository {
-    async fn insert(&self, user: NewUser) -> RepositoryResult<User> {
-        // The UNIQUE index on `email` is what enforces the contract above; the
-        // conversion in `repository::error` turns its violation into
-        // `Conflict`.
-        let row = sqlx::query_as::<_, UserRow>(&format!(
-            "INSERT INTO users (id, email, password_hash, role, failed_attempts, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 0, ?, ?)
-             RETURNING {USER_COLUMNS}"
-        ))
-        .bind(user.id)
-        .bind(user.email)
-        .bind(user.password_hash)
-        .bind(user.role.as_str())
-        .bind(Utc::now())
-        .bind(Utc::now())
-        .fetch_one(&self.pool)
-        .await
-        .map_err(RepositoryError::from)?;
-
-        row.try_into()
-    }
-
-    async fn find_by_id(&self, id: Uuid) -> RepositoryResult<Option<User>> {
-        let row =
-            sqlx::query_as::<_, UserRow>(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?"))
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-        row.map(User::try_from).transpose()
-    }
-
-    async fn find_by_email(&self, email: &str) -> RepositoryResult<Option<User>> {
-        let row = sqlx::query_as::<_, UserRow>(&format!(
-            "SELECT {USER_COLUMNS} FROM users WHERE email = ?"
-        ))
-        .bind(email)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(User::try_from).transpose()
-    }
-
-    async fn record_failed_login(
-        &self,
-        id: Uuid,
-        attempts: i64,
-        locked_until: Option<DateTime<Utc>>,
-    ) -> RepositoryResult<()> {
-        sqlx::query(
-            "UPDATE users SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(attempts)
-        .bind(locked_until)
-        .bind(Utc::now())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn clear_login_failures(&self, id: Uuid) -> RepositoryResult<()> {
-        sqlx::query(
-            "UPDATE users SET failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?",
-        )
-        .bind(Utc::now())
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn update_password_hash(&self, id: Uuid, password_hash: &str) -> RepositoryResult<()> {
-        sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
-            .bind(password_hash)
-            .bind(Utc::now())
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn set_role(&self, id: Uuid, role: Role) -> RepositoryResult<()> {
-        sqlx::query("UPDATE users SET role = ?, updated_at = ? WHERE id = ?")
-            .bind(role.as_str())
-            .bind(Utc::now())
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }

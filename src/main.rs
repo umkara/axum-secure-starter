@@ -6,8 +6,8 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Context;
 use axum_server::Handle;
 use bastion::{
-    config::AppConfig, db, plugin::Registry, repository::Repositories, server,
-    service::AdminBootstrap, state::AppState, telemetry,
+    config::AppConfig, plugin::Registry, repository::Repositories, server, service::AdminBootstrap,
+    state::AppState, telemetry,
 };
 use tokio::signal;
 
@@ -54,8 +54,11 @@ async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let config = std::sync::Arc::new(config);
-    let pool = db::connect(&config.database).await?;
-    let state = AppState::new(config.clone(), Repositories::sqlite(pool));
+    // The composition root does not name a backend: `Repositories::connect`
+    // maps the validated configuration to an implementation, so adding a store
+    // changes nothing here.
+    let repositories = Repositories::connect(&config.database).await?;
+    let state = AppState::new(config.clone(), repositories);
 
     if let Some(bootstrap) = &config.bootstrap_admin {
         match state

@@ -30,6 +30,7 @@ request](#your-first-request) to try it.
 - [How authentication works](#how-authentication-works)
 - [API reference](#api-reference)
 - [Configuration](#configuration)
+- [Storage backends](#storage-backends)
 - [Middleware plugins](#middleware-plugins)
 - [Enabling TLS](#enabling-tls)
 - [Creating an administrator](#creating-an-administrator)
@@ -57,18 +58,23 @@ cap on concurrent password hashing, body-size limits, and the full set of
 response hardening headers on every response.
 
 **A structure you can extend.** Layered like a Spring application — thin
-handlers, services that own the rules, repositories behind traits — so swapping
-SQLite for Postgres means replacing repository implementations and nothing else.
+handlers, services that own the rules, repositories behind traits.
+
+**Four storage backends.** SQLite, PostgreSQL, MySQL and MongoDB, chosen with
+one environment variable and compiled in one at a time. They are not four
+lookalikes: one [conformance suite](#storage-backends) runs the same sixteen
+contract assertions against every one of them.
 
 **Middleware you can add without touching the stack.** Rate limiting, CORS,
 request logging and four pre-routing guards ship as [plugins](#middleware-plugins).
 A plugin can only add; it cannot remove, replace or reorder a core protection,
 and that is enforced by the types rather than by review.
 
-**Tests that prove it.** 151 of them, including 31 that actively attack the
+**Tests that prove it.** 167 of them, including 31 that actively attack the
 server — SQL injection, forged and downgraded JWTs, privilege escalation,
 request smuggling, path confusion, timing-based account enumeration, login
-floods — and 23 that attack the plugin system with plugins written to break it.
+floods — 23 that attack the plugin system with plugins written to break it, and
+16 that hold every storage backend to the same contract.
 
 ---
 
@@ -78,8 +84,9 @@ floods — and 23 that attack the plugin system with plugins written to break it
   from [rustup.rs](https://rustup.rs) if needed.
 - **OpenSSL** for generating a signing key — preinstalled on macOS and most
   Linux distributions.
-- No database server. Data lives in a local SQLite file the server creates on
-  first run.
+- No database server for the default build. Data lives in a local SQLite file
+  the server creates on first run. PostgreSQL, MySQL and MongoDB are available
+  as [build-time backends](#storage-backends).
 
 ---
 
@@ -326,7 +333,7 @@ Invalid configuration stops the server rather than failing open later.
 | --- | --- | --- |
 | `APP_ENV` | `development` | `production` refuses to start without TLS |
 | `APP_BIND_ADDR` | `127.0.0.1:8443` | Use `0.0.0.0:8443` to accept external traffic |
-| `APP_DATABASE_URL` | `sqlite://data/app.db?mode=rwc` | SQLite file location |
+| `APP_DATABASE_URL` | `sqlite://data/app.db?mode=rwc` | Store location; the scheme picks the [backend](#storage-backends) |
 | `APP_CORS_ALLOWED_ORIGINS` | empty | Comma-separated exact origins; `*` is rejected |
 | `APP_ACCESS_TOKEN_TTL_SECS` | `900` | Access token lifetime |
 | `APP_REFRESH_TOKEN_TTL_SECS` | `1209600` | Refresh token lifetime (14 days) |
@@ -461,6 +468,154 @@ beside it, not by touching the extractor, the session service, or any handler.
 This affects **access tokens only**. Refresh tokens are opaque whatever this
 says: 32 bytes of CSPRNG output, stored as a SHA-256 digest, single-use, and
 revocable server-side.
+
+---
+
+## Storage backends
+
+Every service depends on a repository trait, never on a database. Four
+implementations of those traits ship: SQLite, PostgreSQL, MySQL and MongoDB.
+
+Backends are **compiled in, not loaded**. Each one carries a driver, a
+connection stack and — for MongoDB — a second TLS surface, so a deployment
+should build the one it runs and no more.
+
+```bash
+cargo build --release                              # SQLite, the default
+cargo build --release --no-default-features --features postgres
+cargo build --release --no-default-features --features mysql
+cargo build --release --no-default-features --features mongodb
+```
+
+The url scheme selects the backend at start-up:
+
+| Backend | Feature | `APP_DATABASE_URL` | Notes |
+| --- | --- | --- | --- |
+| SQLite | `sqlite` (default) | `sqlite://data/app.db?mode=rwc` | No server. The file and its `-wal`/`-shm` sidecars are narrowed to `0600` |
+| PostgreSQL | `postgres` | `postgres://user:pass@host/db` | `postgresql://` also accepted |
+| MySQL | `mysql` | `mysql://user:pass@host/db` | Needs MySQL 8.0.1+; see [MySQL](#mysql) |
+| MongoDB | `mongodb` | `mongodb://host:27017/db` | The database name is required. Read [MongoDB](#mongodb) before choosing it |
+
+A url whose scheme names a backend the binary was not built with **fails at
+start-up**, naming the feature that would fix it. A url with no scheme is
+rejected rather than assumed to be a SQLite path: guessing would let a typo in
+`APP_DATABASE_URL` silently start a server against an empty local file instead
+of the production database it was meant to reach.
+
+The schema is applied on start-up from `migrations/<backend>/`, so the directory
+does not need to ship alongside the binary. MongoDB has no migrations; its
+equivalent is the index creation in `repository::mongo::ensure_indexes`, which
+runs at the same point and fails start-up the same way.
+
+### One contract, four implementations
+
+Each repository trait carries a **# Contract** section — `insert` rejects a
+duplicate email with `Conflict`, `mark_used` returns `true` exactly once,
+every note operation is scoped by owner. With one implementation those were
+descriptions. With four they are a specification, and
+[`tests/backends.rs`](tests/backends.rs) runs the same sixteen assertions
+against every backend that is reachable:
+
+```bash
+cargo test --test backends                      # SQLite only; no services needed
+
+docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=bastion -e POSTGRES_USER=bastion -e POSTGRES_DB=bastion_test postgres:17-alpine
+docker run -d -p 3306:3306 -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=bastion_test -e MYSQL_USER=bastion -e MYSQL_PASSWORD=bastion mysql:8.4
+docker run -d -p 27017:27017 mongo:8
+
+export APP_TEST_POSTGRES_URL=postgres://bastion:bastion@localhost/bastion_test
+export APP_TEST_MYSQL_URL=mysql://bastion:bastion@localhost/bastion_test
+export APP_TEST_MONGODB_URL=mongodb://localhost:27017/bastion_test
+cargo test --features all-backends --test backends
+```
+
+A backend whose url is unset is skipped and says so. A backend whose url is set
+while its feature is off fails rather than skipping quietly — that combination
+means the run is not testing what you asked for.
+
+The end-to-end suites (`tests/security.rs`, `tests/attacks.rs`,
+`tests/tokens.rs`, `tests/plugins.rs`) boot the server against SQLite. What the
+other three backends change is the persistence layer, and that is what
+`tests/backends.rs` covers.
+
+### What each backend costs you
+
+**SQLite** is the default because it needs nothing. It also means one instance:
+see [Scope and limitations](#scope-and-limitations).
+
+**PostgreSQL** is the closest fit. Ids are a native `UUID`, timestamps are
+`TIMESTAMPTZ`, `revoked` is a real `BOOLEAN`, and `RETURNING` means a write and
+its read-back are one statement, as in SQLite. Only the placeholder syntax
+differs (`$1` rather than `?`), which is why the statements are written out per
+dialect instead of rewritten at run time.
+
+#### MySQL
+
+Two behaviours need working around, and both are handled in
+[`src/repository/mysql.rs`](src/repository/mysql.rs):
+
+- **No `RETURNING`.** Writes that must return the stored row do the write and
+  the read inside a transaction. Without the transaction the read could observe
+  another session's later write.
+- **`rows_affected` counts changed rows, not matched rows.** Re-saving a note
+  with the title and body it already has changes nothing, so judging existence
+  by `rows_affected` would answer 404 for a note that is sitting right there.
+  `update_owned` uses a `SELECT` under the same `WHERE` instead.
+
+The schema needs **MySQL 8.0.1 or newer**: `email` and the token-hash columns
+carry the `utf8mb4_0900_as_cs` collation, because the repository contracts say
+those values are compared exactly and MySQL's default collation is
+case-insensitive. `utf8mb4_bin` would be the obvious choice, but MySQL sets the
+protocol BINARY flag on any `_bin` column, which makes sqlx report it as
+`VARBINARY` and refuse to decode it into a `String`. MariaDB has no collation
+by that name; a MariaDB deployment must edit those two lines in
+`migrations/mysql/0001_init.sql` (to `utf8mb4_uca1400_as_cs` on 10.10+) before
+first run.
+
+#### MongoDB
+
+The other three differ from each other in dialect. This one differs in kind.
+Read [`src/repository/mongo.rs`](src/repository/mongo.rs) before running it in
+production. The short version:
+
+- **Uniqueness is an index, created at connect time.** `Conflict` on a
+  duplicate email depends entirely on it — without the index, `insert` would
+  happily store a second account for the same address. Index creation runs
+  before the handle is returned, and a failure to create one fails start-up.
+- **Timestamps lose sub-millisecond precision.** BSON dates are milliseconds.
+  Nothing in the application compares two timestamps for equality, so this is
+  not observable — except that two notes written in the same millisecond tie on
+  `created_at`, so `list_owned` sorts by `_id` as a tiebreaker.
+- **There is no `ON DELETE CASCADE`.** The SQL schemas delete a user's tokens
+  and notes along with the user; MongoDB cannot. Nothing in the application
+  deletes a user today, so nothing is orphaned — but a future `delete_user`
+  must remove the dependent documents itself, and one that forgets is a data
+  leak, not an untidiness.
+- **Single-document atomicity is enough for what this server needs.**
+  `mark_used` is a `findOneAndUpdate` whose filter contains the `used_at IS
+  NULL` guard, so of two concurrent refreshes exactly one wins — the same
+  single-shot redemption the SQL backends get from a conditional `UPDATE`. No
+  transaction, and so no replica set, is required.
+- The driver needs **Rust 1.88 or newer**, above this crate's 1.85 baseline.
+  Only builds with the `mongodb` feature are affected.
+
+### Adding a fifth
+
+1. Add a feature to `Cargo.toml` and a variant to `Backend` in
+   [`src/config.rs`](src/config.rs). The enum is closed, so the compiler now
+   lists everywhere the new backend has to be handled.
+2. Write `src/repository/<name>.rs` implementing the five ports. If it speaks
+   SQL, reuse the column lists and error translation in
+   [`src/repository/sql.rs`](src/repository/sql.rs).
+3. Add `migrations/<name>/`, and a `connect` in [`src/db.rs`](src/db.rs) that
+   opens a handle and applies them.
+4. Add a constructor and one match arm in
+   [`src/repository/set.rs`](src/repository/set.rs).
+5. Add it to the loop in [`tests/backends.rs`](tests/backends.rs) and make the
+   suite pass.
+
+Nothing in `api`, `service`, `domain`, `security` or `state` changes — that is
+the point of the seam, and step 5 is what proves it.
 
 ---
 
@@ -650,14 +805,14 @@ header on every response for correlation.
 ## Adapting it to your project
 
 **Replace the example resource.** `notes` is a placeholder. The files to copy
-are `src/domain/note.rs`, `src/repository/note_repository.rs`,
+are `src/domain/note.rs`, `src/repository/note_repository.rs`, its
+implementation in each `src/repository/<backend>.rs` you build,
 `src/service/note_service.rs`, and `src/api/note_handler.rs`, plus a migration
-in `migrations/`. Register the routes in `src/api/mod.rs`.
+in `migrations/<backend>/`. Register the routes in `src/api/mod.rs`.
 
-**Move to Postgres.** Every service depends on a repository trait, not on
-SQLite. Add the `postgres` feature to `sqlx` in `Cargo.toml`, write new
-implementations of the repository traits, and change the wiring in
-`src/state.rs`. Nothing above the repository layer changes.
+**Move to Postgres, MySQL or MongoDB.** Already done — build with that feature
+and point `APP_DATABASE_URL` at it. See [Storage backends](#storage-backends),
+including what to add for a fifth.
 
 **Add a field to the API.** Request and response types live in
 `src/api/dto.rs`, deliberately separate from the domain entities — so adding a
@@ -680,7 +835,7 @@ keeps that true while still letting you add to it.
 cargo test
 ```
 
-151 tests across five groups:
+167 tests across six groups:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
@@ -700,6 +855,12 @@ cargo test
 - **`tests/tokens.rs`** runs the same session end to end through every
   [access token format](#access-token-formats), and proves a token written in
   one does not authenticate against a server running the other.
+- **`tests/backends.rs`** holds every [storage backend](#storage-backends) to
+  the contracts written on the repository traits — that a duplicate email is a
+  conflict rather than a second account, that a refresh token can be redeemed
+  exactly once under concurrency, that a leaked note id is not authorisation.
+  It runs against whichever stores the environment offers, and says which it
+  skipped.
 
 Also useful:
 
@@ -741,7 +902,7 @@ lost rotation race revokes the whole family — and shows what each one costs.
 src/
   api/          HTTP edge      — routing, DTOs, extractors, middleware
   service/      business rules — one service per responsibility
-  repository/   persistence    — traits + SQLite implementations
+  repository/   persistence    — a trait per aggregate, one module per backend
   domain/       entities       — data and its own invariants
   security/     cross-cutting  — hashing, tokens, authn/authz, headers
   plugin/       middleware     — the plugin framework and seven built-ins
@@ -750,7 +911,7 @@ src/
   config.rs     configuration, validated at start-up
   error.rs      one error type, one wire format
   state.rs      the wiring: concrete implementations chosen once
-migrations/     schema
+migrations/     schema, one directory per SQL backend
 tests/          integration and adversarial suites
 tools/          browser API console
 bastion/        documentation site (served by the server itself)
@@ -758,8 +919,10 @@ examples/       runnable apps built on this server
 ```
 
 Dependencies point inward. Nothing below `api` knows HTTP exists; nothing above
-`repository` knows SQL exists. Concrete types — SQLite, JWT, Argon2 — are named
-in exactly one file, `state.rs`, so substituting any of them is a local change.
+`repository` knows SQL exists. Concrete types are each named in exactly one
+place — the token format in `security/token.rs`, the storage backend in
+`repository/set.rs`, the rest in `state.rs` — so substituting any of them is a
+local change.
 
 ---
 
@@ -848,9 +1011,11 @@ request-level limits.
 
 Worth knowing before you build on it:
 
-- **Single node.** SQLite means one instance. Rate-limit and hashing budgets are
-  per-process, so multiple replicas each get their own — move rate limiting to
-  your ingress if you scale out, or switch to Postgres.
+- **Rate limits and hashing budgets are per-process.** Multiple replicas each
+  get their own, so move rate limiting to your ingress if you scale out. The
+  store is no longer the constraint — [PostgreSQL, MySQL and
+  MongoDB](#storage-backends) all take concurrent writers — but the default
+  SQLite build still means one instance.
 - **No email flows.** No verification, no password reset. A user who forgets
   their password cannot recover it without an administrator. This is the most
   likely first extension.
@@ -867,9 +1032,10 @@ Worth knowing before you build on it:
 - **Volumetric DDoS is out of scope.** Everything here bounds what one
   connection or one process spends; a flood that saturates your network link has
   to be absorbed upstream.
-- **Data is not encrypted at rest.** Database files are owner-only (`0600`), and
+- **Data is not encrypted at rest.** SQLite files are owner-only (`0600`), and
   password hashes and token digests are individually safe, but resource content
-  is stored in the clear.
+  is stored in the clear. On the networked backends, encryption at rest and file
+  permissions belong to the database server, not to this process.
 
 ---
 

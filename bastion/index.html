@@ -95,7 +95,9 @@
 
 <section id="quickstart">
   <h2>Quickstart</h2>
-  <p>Rust 1.85 or newer. No database server — SQLite file, created on first run.</p>
+  <p>Rust 1.85 or newer. No database server — SQLite file, created on first run.
+  PostgreSQL, MySQL and MongoDB are opt-in builds; the <code>APP_DATABASE_URL</code>
+  scheme picks between them.</p>
 <pre><code>git clone https://github.com/umkara/bastion.git
 cd bastion
 cp .env.example .env

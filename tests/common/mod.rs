@@ -11,10 +11,9 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use axum_server::Handle;
 use bastion::{
     config::{
-        AppConfig, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig, SecurityConfig,
-        ServerConfig, TokenFormat,
+        AppConfig, Backend, BootstrapAdmin, DatabaseConfig, Environment, RateLimitConfig,
+        SecurityConfig, ServerConfig, TokenFormat,
     },
-    db,
     plugin::Registry,
     repository::Repositories,
     server,
@@ -148,6 +147,7 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
         tls: None,
         database: DatabaseConfig {
             url: format!("sqlite://{}?mode=rwc", db_path.display()),
+            backend: Backend::Sqlite,
             max_connections: 4,
             acquire_timeout: Duration::from_secs(5),
         },
@@ -173,10 +173,10 @@ pub async fn spawn_with(options: TestOptions) -> TestApp {
     };
 
     let config = Arc::new(config);
-    let pool = db::connect(&config.database)
+    let repositories = Repositories::connect(&config.database)
         .await
         .expect("failed to prepare the test database");
-    let state = AppState::new(config.clone(), Repositories::sqlite(pool));
+    let state = AppState::new(config.clone(), repositories);
 
     if let Some(bootstrap) = &config.bootstrap_admin {
         state

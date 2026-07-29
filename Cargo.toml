@@ -12,6 +12,20 @@ homepage = "https://github.com/umkara/bastion"
 keywords = ["axum", "api", "authentication", "jwt", "security"]
 categories = ["web-programming::http-server", "authentication"]
 
+# Storage backends are compiled in, not loaded. Each one drags in a driver, a
+# connection stack and — for MongoDB — a second TLS surface, so a deployment
+# should carry only the one it runs. `Backend::from_url` refuses at start-up
+# when a URL names a backend this binary was not built with, which is a boot
+# failure rather than a runtime surprise.
+[features]
+default = ["sqlite"]
+sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+mongodb = ["dep:mongodb", "dep:futures-util"]
+# For the conformance suite, which wants every backend in one binary.
+all-backends = ["sqlite", "postgres", "mysql", "mongodb"]
+
 [dependencies]
 anyhow = "1.0.104"
 argon2 = "0.5.3"
@@ -21,17 +35,25 @@ axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"], optional = true }
 hex = "0.4.3"
 hyper = { version = "1.11.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 jsonwebtoken = { version = "11.0.0", features = ["aws_lc_rs"] }
+# `rustls-tls-aws-lc`, not the default `rustls-tls`: the default pulls ring in
+# as a second rustls provider, and `main` installs aws-lc-rs as *the* provider.
+# Two providers in one process is the failure the pin in `main` exists to
+# prevent.
+mongodb = { version = "3.8.0", default-features = false, features = ["rustls-tls-aws-lc", "dns-resolver", "compat-3-3-0", "bson-3"], optional = true }
 pasetors = { version = "0.7.7", default-features = false, features = ["std", "v4"] }
 rand = { version = "0.10.2", features = ["std", "std_rng"] }
 rustls = { version = "0.23.42", default-features = false, features = ["aws-lc-rs"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite", "macros", "migrate", "uuid", "chrono"] }
+# The driver features (`sqlite`, `postgres`, `mysql`) are turned on by this
+# crate's own features, not here, so that a build carries one driver.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "macros", "migrate", "uuid", "chrono"] }
 subtle = "2.6.1"
 thiserror = "2.0.19"
 tokio = { version = "1", features = ["full"] }
