@@ -9,10 +9,27 @@
 [advisories]
 ignore = [
     # rsa 0.9.x, Marvin timing side-channel. Reaches the lockfile through
-    # `sqlx-mysql`, a driver this project does not enable — sqlx is pulled in
-    # with default-features off and only the `sqlite` driver switched on.
-    # Verified absent from the build graph; the `no-unused-drivers` CI job
-    # fails the build if it ever appears, so this ignore cannot quietly start
-    # covering real exposure.
+    # `sqlx-mysql`.
+    #
+    # **The default build does not compile it.** sqlx is pulled in with
+    # default-features off, and the driver features are this crate's own:
+    # `sqlite` is the default; `postgres`, `mysql` and `mongodb` are opt-in.
+    # The `no-unused-drivers` CI job fails the build if the default graph ever
+    # gains a driver, so this ignore cannot quietly start covering exposure
+    # nobody chose. That job also asserts the converse — that `--features mysql`
+    # *does* pull the driver in — because a scope note describing a build that
+    # no longer exists is worse than no note.
+    #
+    # **A `--features mysql` build compiles it**, and that is a trade rather
+    # than an oversight. Two things bound it. `rsa` is reached only during the
+    # connection handshake, where `caching_sha2_password` encrypts the password
+    # with the server's public key; it is on no request path. And the advisory
+    # is against private-key operations, while the client side performs
+    # public-key encryption — not the operation Marvin targets. A MySQL
+    # deployment that wants the dependency gone should connect over TLS, which
+    # skips the RSA exchange entirely, or choose PostgreSQL.
+    #
+    # Revisit when `rsa` publishes a fixed release: the waiver becomes an
+    # upgrade rather than an argument.
     "RUSTSEC-2023-0071",
 ]

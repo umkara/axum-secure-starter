@@ -33,7 +33,80 @@ jobs:
         run: cargo clippy --all-targets --all-features
 
       - name: Test
+        # Every backend compiled, but only SQLite reachable — `tests/backends.rs`
+        # skips a store whose url is unset. The `backends` job below is where
+        # the other three actually run.
         run: cargo test --all-features
+
+  backends:
+    name: Storage backend conformance
+    runs-on: ubuntu-latest
+
+    # Without these, `tests/backends.rs` skips three of the four backends and
+    # reports success, which is the failure mode the suite exists to prevent:
+    # a contract that only SQLite is held to is a contract SQLite defines.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bastion
+          POSTGRES_PASSWORD: bastion
+          POSTGRES_DB: bastion_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bastion"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+      mysql:
+        # 8.4, not 8.0: the schema needs `utf8mb4_0900_as_cs`, which arrived in
+        # 8.0.1, and pinning the current LTS keeps that requirement honest.
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: bastion_test
+          MYSQL_USER: bastion
+          MYSQL_PASSWORD: bastion
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+
+      mongodb:
+        image: mongo:8
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 })'"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Conformance suite, every backend
+        env:
+          APP_TEST_POSTGRES_URL: postgres://bastion:bastion@127.0.0.1:5432/bastion_test
+          APP_TEST_MYSQL_URL: mysql://bastion:bastion@127.0.0.1:3306/bastion_test
+          APP_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/bastion_test
+        run: cargo test --features all-backends --test backends
+
+  feature-builds:
+    name: Each backend builds on its own
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres, mysql, mongodb]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # A deployment builds one backend, so one backend has to compile alone.
+      # `--all-features` in the `check` job would never catch a module that
+      # only compiles because some other backend's imports are also present.
+      - name: Build with only ${{ matrix.backend }}
+        run: cargo check --all-targets --no-default-features --features ${{ matrix.backend }}
 
   example-nextjs:
     name: Example builds
@@ -82,21 +155,35 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   no-unused-drivers:
-    name: Unused database drivers stay out of the build
+    name: The default build carries one driver
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # `.cargo/audit.toml` waives an advisory on the strength of these drivers
-      # being absent from the compiled graph. If that ever stops being true the
-      # waiver would start hiding a live vulnerability, so prove it here instead
-      # of trusting the comment.
-      - name: Assert no MySQL or Postgres driver is compiled
+      # `.cargo/audit.toml` waives RUSTSEC-2023-0071 on the strength of the
+      # MySQL driver being absent from the *default* build graph. Since the
+      # storage backends landed, `--features mysql` deliberately puts it there —
+      # so this job pins the default rather than the crate, and the waiver says
+      # what a MySQL build is accepting. If the default ever starts carrying a
+      # driver it does not need, the waiver would begin hiding exposure nobody
+      # opted into, and that is what fails here.
+      - name: Assert the default features compile only the SQLite driver
         run: |
           if cargo tree -e normal | grep -E 'sqlx-(mysql|postgres)'; then
-            echo "::error::a sqlx driver that .cargo/audit.toml assumes is unused is now in the build graph; revisit the waiver"
+            echo "::error::the default build now carries a driver .cargo/audit.toml assumes is absent; revisit the waiver"
             exit 1
           fi
-          echo "confirmed: only the sqlite driver is compiled"
+          echo "confirmed: the default build compiles only the sqlite driver"
+
+      # The other half of the claim: opting in is what pulls the driver, and
+      # therefore `rsa`, into the graph. If this stops being true the waiver's
+      # scope note is wrong in the other direction and should be rewritten.
+      - name: Assert the MySQL feature is what pulls the driver in
+        run: |
+          if ! cargo tree -e normal --features mysql | grep -q 'sqlx-mysql'; then
+            echo "::error::--features mysql no longer compiles sqlx-mysql; .cargo/audit.toml describes a build that does not exist"
+            exit 1
+          fi
+          echo "confirmed: sqlx-mysql, and its rsa dependency, arrive only with the mysql feature"
