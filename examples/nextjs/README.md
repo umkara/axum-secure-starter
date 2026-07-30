@@ -46,6 +46,56 @@ cargo run
 `APP_CORS_ALLOWED_ORIGINS` can stay empty — every call to Bastion is
 server-to-server, so CORS never enters the picture.
 
+### Running Bastion on PostgreSQL, MySQL or MongoDB instead
+
+The plugin talks to Bastion over six HTTP endpoints and holds no opinion about
+what is behind them, so swapping Bastion's store changes nothing in this app —
+not a line of `src/lib/bastion/`, not `.env.local`, not the Drizzle schema. Two
+things change, both on the Bastion side: the feature it is built with, and the
+url. For PostgreSQL:
+
+```bash
+docker run -d -p 5432:5432 \
+  -e POSTGRES_USER=bastion -e POSTGRES_PASSWORD=bastion -e POSTGRES_DB=bastion \
+  postgres:17-alpine
+```
+
+```bash
+APP_ENV=development \
+APP_BIND_ADDR=127.0.0.1:8080 \
+APP_JWT_SECRET="$(openssl rand -base64 48)" \
+APP_DATABASE_URL="postgres://bastion:bastion@127.0.0.1:5432/bastion" \
+APP_BOOTSTRAP_ADMIN_EMAIL=admin@example.com \
+APP_BOOTSTRAP_ADMIN_PASSWORD=bootstrap-admin-password-1 \
+cargo run --no-default-features --features postgres
+```
+
+`--no-default-features` matters: the default is `sqlite`, and leaving it on
+compiles a driver this run will not use. Substitute `mysql` or `mongodb` and the
+matching url scheme for the others — see the [storage
+backends](../../README.md#storage-backends) section for what each one costs.
+
+This app's own catalogue and carts stay on `better-sqlite3` either way. The two
+databases are unrelated: Bastion owns accounts, this app owns commerce, and
+neither reads the other's tables.
+
+**Verified end to end on PostgreSQL**, not assumed — every endpoint the plugin
+drives, with the behaviours it depends on:
+
+| | |
+|---|---|
+| `auth/register` | 201, and 409 on a repeat — the plugin reads 409 as "already exists" |
+| `auth/login` | 200 with a token pair |
+| `auth/refresh` | 200, and the refresh token really rotates |
+| replaying a spent refresh token | 401 |
+| the rotated token afterwards | 401 — reuse revoked the whole family |
+| `auth/password` | 204, and it ends every existing session |
+| `auth/logout` | 204, and the refresh token is dead after it |
+
+Also checked with `APP_TOKEN_FORMAT=opaque`, the one format that reads a row per
+request: the access token stops working the instant the session is revoked,
+rather than at expiry.
+
 Then the app:
 
 ```bash
