@@ -1,0 +1,9 @@
+node_modules
+.next
+blog.db
+blog.db-shm
+blog.db-wal
+drizzle
+next-env.d.ts
+tsconfig.tsbuildinfo
+.env.local

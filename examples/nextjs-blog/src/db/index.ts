@@ -1,25 +1,20 @@
 /**
- * One SQLite file, two concerns: BetterAuth's session tables and the shop's
- * own catalogue/cart/orders. They share a database because they share
- * transactions in exactly one place — checkout, which reads a cart and writes
- * an order.
+ * One SQLite file holding the blog's own data — posts, authors — and the
+ * server-side sessions.
  *
- * Note what is *not* here: no user credentials, no password hashes. Those live
- * in Bastion, which is the entire point of the example.
+ * What is *not* here: passwords, password hashes, or any credential. Those
+ * live in Bastion, which is the entire point of the example. The token pair is
+ * here, sealed, because it has to live somewhere the browser cannot reach.
  */
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 
-import * as authSchema from "./schema/auth";
-import * as commerceSchema from "./schema/commerce";
+import * as schema from "./schema";
 
-const url = process.env.DATABASE_URL ?? "./shop.db";
+const url = process.env.DATABASE_URL ?? "./blog.db";
 
-/**
- * The raw handle. `lib/bastion/store.ts` uses it directly so its
- * compare-and-swap stays readable as SQL.
- */
+/** The raw handle. `lib/session.ts` uses it directly so its compare-and-swap stays readable as SQL. */
 export const sqlite = new Database(url);
 
 // `busy_timeout` goes first, and the order is load-bearing. Switching to WAL
@@ -50,8 +45,4 @@ for (let attempt = 0; ; attempt++) {
 }
 sqlite.pragma("foreign_keys = ON");
 
-export const schema = { ...authSchema, ...commerceSchema };
-
 export const db = drizzle(sqlite, { schema });
-
-export type Db = typeof db;

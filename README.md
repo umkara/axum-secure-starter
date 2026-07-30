@@ -950,6 +950,18 @@ constraints this server imposes on a browser-facing client — a page CSP with n
 inline scripts, `allow_credentials(false)`, and single-use refresh tokens whose
 lost rotation race revokes the whole family — and shows what each one costs.
 
+**[`examples/nextjs-blog`](examples/nextjs-blog)** — the same job with **no auth
+library at all**. A blog: anyone reads, only the author writes. The entire
+integration is two files — the six HTTP calls, and the cookie plus the refresh
+lease — so there is nowhere for the work to hide.
+
+The two examples are deliberately different stories rather than the same one
+twice. Read the blog if you want to see what integrating with Bastion actually
+involves; read the Next.js example if you already have a session library and
+want the plugin shape. The blog also shows an authorisation shape the other one
+does not: public content, where a draft's own author is the only reader, and
+where every public page makes zero calls to Bastion.
+
 ---
 
 ## Project layout

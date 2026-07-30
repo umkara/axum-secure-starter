@@ -115,6 +115,40 @@ jobs:
       - name: Build with only ${{ matrix.backend }}
         run: cargo check --all-targets --no-default-features --features ${{ matrix.backend }}
 
+  example-nextjs-blog:
+    name: Blog example builds
+    runs-on: ubuntu-latest
+    # The library-free integration: no auth library, so a break here is a break
+    # in the two files that talk to Bastion rather than in somebody else's SDK.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: examples/nextjs-blog/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: examples/nextjs-blog
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: examples/nextjs-blog
+        run: pnpm typecheck
+
+      - name: Build
+        working-directory: examples/nextjs-blog
+        # `seal.ts` throws at import when the secret is missing or the wrong
+        # length, so the build needs a valid one — any valid one.
+        env:
+          BASTION_TOKEN_SECRET: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+        run: pnpm build
+
   example-nextjs:
     name: Example builds
     runs-on: ubuntu-latest

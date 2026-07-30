@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", serif;
+}
+
+/* Prose defaults, hand-rolled rather than a plugin: the example should install
+   as few things as it can get away with. */
+.prose p { margin-block: 1rem; line-height: 1.75; }
+.prose h2 { font-size: 1.35rem; font-weight: 600; margin-block: 1.75rem 0.75rem; }
