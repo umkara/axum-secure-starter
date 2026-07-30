@@ -11,6 +11,10 @@ repository = "https://github.com/umkara/bastion"
 homepage = "https://bastionrs.dev"
 keywords = ["axum", "api", "authentication", "jwt", "security"]
 categories = ["web-programming::http-server", "authentication"]
+# There is a second binary, so `cargo run` would otherwise refuse as ambiguous
+# whenever both drivers are compiled in — and every "getting started" command in
+# the README is a bare `cargo run`.
+default-run = "bastion"
 
 # Storage backends are compiled in, not loaded. Each one drags in a driver, a
 # connection stack and — for MongoDB — a second TLS surface, so a deployment
@@ -25,6 +29,12 @@ mysql = ["sqlx/mysql"]
 mongodb = ["dep:mongodb", "dep:futures-util"]
 # For the conformance suite, which wants every backend in one binary.
 all-backends = ["sqlite", "postgres", "mysql", "mongodb"]
+
+# Needs both drivers at once, so it is skipped unless both are compiled in.
+# `sqlite` is on by default, which makes `--features postgres` enough.
+[[bin]]
+name = "bastion-migrate-store"
+required-features = ["sqlite", "postgres"]
 
 [dependencies]
 anyhow = "1.0.104"

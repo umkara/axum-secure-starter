@@ -11,6 +11,20 @@ their history is in the git log.
 
 ### Added
 
+- **`bastion-migrate-store`**, which copies a SQLite database into an empty
+  PostgreSQL one. Without it, changing `APP_DATABASE_URL` from `sqlite://` to
+  `postgres://` points the server at an empty schema and locks out every
+  existing account — Argon2 hashes exist nowhere else. It opens the source
+  read-only, refuses a non-empty target, does everything in one transaction,
+  verifies the counts before committing, and has a `--dry-run` that performs the
+  whole copy and rolls back. `used_at`, `revoked`, `failed_attempts` and
+  `locked_until` are carried across exactly: a spent refresh token arriving
+  unspent is a replay, and a lifted lockout hands back spent guesses.
+  SQLite → PostgreSQL only; MySQL and MongoDB have no equivalent.
+- `tests/migrate_store.rs` — five tests checking that migration column by
+  column, including that a dry run writes nothing, a populated target is refused
+  without deleting what was there, and a missing source file is an error rather
+  than a successful-looking copy of nothing.
 - **Three more storage backends: PostgreSQL, MySQL and MongoDB**, joining
   SQLite. The backend comes from the `APP_DATABASE_URL` scheme and is compiled
   in behind a cargo feature — `sqlite` (default), `postgres`, `mysql`,
@@ -73,6 +87,9 @@ their history is in the git log.
 
 ### Changed
 
+- `Cargo.toml` gained `default-run = "bastion"`. There are two binaries now, and
+  without it a bare `cargo run` — which is every getting-started command in the
+  README — fails as ambiguous whenever both drivers are compiled in.
 - `migrations/` gained a directory per SQL backend: the SQLite files moved to
   `migrations/sqlite/` unchanged, so an existing database still matches its
   recorded checksums. MongoDB has no migrations; index creation at connect time

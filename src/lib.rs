@@ -19,6 +19,9 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+/// Copying a SQLite store into a PostgreSQL one. Needs both drivers.
+#[cfg(all(feature = "sqlite", feature = "postgres"))]
+pub mod migrate;
 pub mod net;
 pub mod plugin;
 pub mod repository;

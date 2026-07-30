@@ -70,7 +70,7 @@ request logging and four pre-routing guards ship as [plugins](#middleware-plugin
 A plugin can only add; it cannot remove, replace or reorder a core protection,
 and that is enforced by the types rather than by review.
 
-**Tests that prove it.** 167 of them, including 31 that actively attack the
+**Tests that prove it.** 170 of them, including 31 that actively attack the
 server — SQL injection, forged and downgraded JWTs, privilege escalation,
 request smuggling, path confusion, timing-based account enumeration, login
 floods — 23 that attack the plugin system with plugins written to break it, and
@@ -507,6 +507,56 @@ does not need to ship alongside the binary. MongoDB has no migrations; its
 equivalent is the index creation in `repository::mongo::ensure_indexes`, which
 runs at the same point and fails start-up the same way.
 
+### Moving an existing database to PostgreSQL
+
+Changing `APP_DATABASE_URL` from `sqlite://` to `postgres://` points the server
+at an **empty** schema. Every account, password hash, refresh-token family and
+note stays behind in the file. Argon2 hashes exist nowhere else, so a deployment
+that switches without copying the data has locked out every user permanently.
+
+`bastion-migrate-store` is the copy:
+
+```bash
+cargo build --release --features postgres --bin bastion-migrate-store
+```
+
+```bash
+sudo systemctl stop bastion
+```
+
+```bash
+./target/release/bastion-migrate-store --from sqlite:///var/lib/bastion/app.db --to postgres://bastion:pw@localhost/bastion --dry-run
+```
+
+The dry run does the whole copy, checks it against every constraint the real one
+would hit, then rolls back — so a schema problem surfaces before anything is
+written. Drop `--dry-run` to commit, then point `APP_DATABASE_URL` at PostgreSQL
+and start the service.
+
+**Stop the server first.** Rows written to SQLite after the copy begins are not
+carried across, and the tool cannot detect that for you. Sessions created
+mid-migration are what you would lose.
+
+What makes it safe to point at production:
+
+- The **source is opened read-only**, and a path that does not exist is an error
+  rather than a new empty database — otherwise a typo would produce a run that
+  copied nothing and reported success.
+- The **target must be empty**. A half-populated one usually means an earlier
+  attempt died, and appending would duplicate rows or fail confusingly.
+- **One transaction.** A failure on the last row leaves the target as empty as it
+  started, so a retry is just a retry.
+- **Counts are verified before the commit**, inside that transaction.
+- `used_at` and `revoked` are **carried across exactly**. This is the part that
+  is a security property rather than a nicety: a spent refresh token arriving
+  unspent is a replay the server would honour, and a revoked family arriving
+  clean undoes a revocation somebody performed deliberately.
+- Lockout state — `failed_attempts` and `locked_until` — survives too, so a
+  migration is not a way to hand an attacker back their spent guesses.
+
+It copies SQLite into PostgreSQL and nothing else. MySQL and MongoDB have no
+equivalent yet; say so rather than assuming this tool covers them.
+
 ### One contract, four implementations
 
 Each repository trait carries a **# Contract** section — `insert` rejects a
@@ -835,7 +885,8 @@ keeps that true while still letting you add to it.
 cargo test
 ```
 
-167 tests across six groups:
+170 tests across seven groups. Five more — the migration suite — need a
+PostgreSQL server and are compiled out without one:
 
 - **Unit tests** run against in-memory fakes, so questions of policy — how many
   failures lock an account, whether a spent refresh token can be replayed —
@@ -855,6 +906,11 @@ cargo test
 - **`tests/tokens.rs`** runs the same session end to end through every
   [access token format](#access-token-formats), and proves a token written in
   one does not authenticate against a server running the other.
+- **`tests/migrate_store.rs`** checks the SQLite → PostgreSQL copy column by
+  column, because that tool's bugs are the unrecoverable kind: a dropped account
+  cannot be restored, and a refresh token arriving with `used_at` cleared is a
+  replay the server would honour. Needs `--features postgres` and
+  `APP_TEST_POSTGRES_URL`; skipped otherwise.
 - **`tests/backends.rs`** holds every [storage backend](#storage-backends) to
   the contracts written on the repository traits — that a duplicate email is a
   conflict rather than a second account, that a refresh token can be redeemed

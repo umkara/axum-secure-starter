@@ -90,6 +90,13 @@ jobs:
           APP_TEST_MONGODB_URL: mongodb://127.0.0.1:27017/bastion_test
         run: cargo test --features all-backends --test backends
 
+      # Last, and in its own step: it truncates the PostgreSQL database, which
+      # would pull the rug from the suite above if the two ran together.
+      - name: SQLite to PostgreSQL migration
+        env:
+          APP_TEST_POSTGRES_URL: postgres://bastion:bastion@127.0.0.1:5432/bastion_test
+        run: cargo test --features postgres --test migrate_store
+
   feature-builds:
     name: Each backend builds on its own
     runs-on: ubuntu-latest
