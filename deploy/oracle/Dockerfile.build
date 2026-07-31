@@ -21,6 +21,15 @@ FROM ${RUST_IMAGE} AS build
 # from anything a caller controls.
 ARG CARGO_FEATURES=
 
+# Concurrency cap, as a ready-made `--jobs N` or empty for cargo's default (one
+# job per core). build.sh sizes it against the builder's RAM.
+#
+# It matters more than it looks. rustc is memory-hungry — a job per core on a
+# small builder is how a Rust build exhausts the machine rather than merely
+# loading it, and the process that dies is whichever the host picks, not
+# necessarily this build. Same word-splitting note as CARGO_FEATURES.
+ARG CARGO_JOBS=
+
 # aws-lc-rs (used by rustls, sqlx and jsonwebtoken here) compiles C and needs
 # both cmake and clang; the base image ships neither.
 RUN apt-get update \
@@ -41,13 +50,13 @@ RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
  && echo '' > src/lib.rs \
  && echo 'fn main() {}' > src/bin/bastion-migrate-store.rs \
- && cargo build --release --locked ${CARGO_FEATURES} \
+ && cargo build --release --locked ${CARGO_FEATURES} ${CARGO_JOBS} \
  && rm -rf src
 
 COPY . .
 # The stub's fingerprint would otherwise be reused for the real crate.
 RUN touch src/main.rs src/lib.rs src/bin/bastion-migrate-store.rs \
- && cargo build --release --locked ${CARGO_FEATURES}
+ && cargo build --release --locked ${CARGO_FEATURES} ${CARGO_JOBS}
 
 # Debian bookworm carries glibc 2.36; Ubuntu 24.04 carries 2.39. Building
 # against the older one keeps the binary loadable on the newer host.

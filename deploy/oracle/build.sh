@@ -33,6 +33,8 @@ features=""
 no_default_features=0
 # The instance is x86_64. See the header before changing this.
 platform=linux/amd64
+# Empty means "size it against the builder's RAM"; see pick_jobs.
+jobs=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -46,6 +48,9 @@ usage: build.sh [--on-server user@host] [--ssh-opt OPT]...
   --platform PLATFORM     container build target, default linux/amd64
                           (the instance is x86_64); ignored by --on-server,
                           which builds natively on whatever the host is
+  --jobs N                concurrent compiler jobs. The default is derived from
+                          the builder's RAM, roughly one job per 2 GiB, because
+                          a job per core is what exhausts a small builder
 
 The storage backend is a compile-time choice, so a PostgreSQL deployment is:
 
@@ -63,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --features)            features="${2:?--features needs a value}"; shift 2 ;;
     --no-default-features) no_default_features=1; shift ;;
     --platform)            platform="${2:?--platform needs a value}"; shift 2 ;;
+    --jobs)                jobs="${2:?--jobs needs a value}"; shift 2 ;;
     -h|--help)             usage ;;
     *)                     echo "build.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -83,6 +89,34 @@ if (( no_default_features )) && ! [[ ",$features," == *,sqlite,* || ",$features,
   echo "          sqlite, postgres, mysql, mongodb" >&2
   exit 2
 fi
+
+if [[ -n "$jobs" ]] && ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+  echo "build.sh: --jobs '$jobs' is not a positive integer." >&2
+  exit 2
+fi
+
+# rustc is memory-hungry, and cargo's default of one job per core assumes a
+# machine sized to its core count. A Docker VM rarely is: this one is given 8
+# cores and 5.75 GiB, and eight concurrent rustc processes exhausted the host
+# badly enough that macOS SIGKILLed the whole VM mid-build — twice — taking
+# every other running container with it. The guest logs no OOM because nothing
+# in the guest failed; it was killed from outside.
+#
+# So budget by memory rather than cores: ~2 GiB per concurrent job, never more
+# jobs than cores, never fewer than one. On a builder with RAM to match its
+# cores this changes nothing.
+pick_jobs() {
+  local mem_bytes ncpu n
+  mem_bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
+  ncpu="$(docker info --format '{{.NCPU}}' 2>/dev/null || echo 1)"
+  [[ "$mem_bytes" =~ ^[0-9]+$ ]] || mem_bytes=0
+  [[ "$ncpu" =~ ^[1-9][0-9]*$ ]] || ncpu=1
+
+  n=$(( mem_bytes / (2 * 1024 * 1024 * 1024) ))
+  (( n < 1 )) && n=1
+  (( n > ncpu )) && n=$ncpu
+  echo "$n"
+}
 
 mkdir -p dist
 
@@ -107,12 +141,15 @@ if [[ "$mode" == container ]]; then
       exit 2 ;;
   esac
 
-  echo "==> building for $platform in a container${cargo_flags[*]+ (${cargo_flags[*]})}"
+  [[ -n "$jobs" ]] || jobs="$(pick_jobs)"
+
+  echo "==> building for $platform in a container, $jobs job(s)${cargo_flags[*]+ (${cargo_flags[*]})}"
   docker buildx build \
     --platform "$platform" \
     --file deploy/oracle/Dockerfile.build \
     --target artifact \
     --build-arg "CARGO_FEATURES=${cargo_flags[*]-}" \
+    --build-arg "CARGO_JOBS=--jobs $jobs" \
     --output "type=local,dest=dist" \
     .
 else
@@ -149,8 +186,13 @@ else
   # The heredoc stays quoted so nothing expands locally; the feature flags reach
   # the remote shell as positional arguments instead, which keeps them intact
   # without a round of quoting nobody wants to reason about.
+  # No memory-derived default here: the instance has one core, so cargo already
+  # runs a single job. An explicit --jobs still forwards, for a bigger shape.
+  remote_flags=("${cargo_flags[@]+"${cargo_flags[@]}"}")
+  [[ -n "$jobs" ]] && remote_flags+=(--jobs "$jobs")
+
   ssh "${ssh_args[@]+"${ssh_args[@]}"}" "$host" bash -seu -s -- \
-    ${cargo_flags[@]+"${cargo_flags[@]}"} <<'REMOTE'
+    ${remote_flags[@]+"${remote_flags[@]}"} <<'REMOTE'
 if ! command -v cargo >/dev/null 2>&1; then
   echo "==> installing the Rust toolchain"
   sudo apt-get update -qq
