@@ -20,6 +20,20 @@
 # Both modes honour them, and the container build applies them to its
 # dependency-cache layer too — otherwise that layer would be compiled with a
 # different feature set from the crate and rebuilt from scratch every time.
+#
+# Exercised end to end in container mode on 2026-07-31, both producing an
+# x86-64 binary:
+#
+#   build.sh                                           default features, sqlite
+#   build.sh --no-default-features --features postgres  postgres
+#
+# The second is worth recording, because a feature flag that never reaches the
+# compiler does not fail — it yields a perfectly good binary with the wrong
+# backend compiled into it, which only surfaces when the server refuses its
+# database url in production. Check the artefact, not the build log:
+# `strings dist/bastion | grep sqlx-postgres` finds the crate's source paths,
+# `sqlx-sqlite` is absent, and the embedded SQL carries $1 placeholders rather
+# than SQLite's ?.
 
 set -euo pipefail
 
