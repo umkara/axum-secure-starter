@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #
-# Produces dist/bastion, an aarch64 Linux binary for the Oracle A1
-# shape.
+# Produces dist/bastion, a Linux binary for the Oracle instance.
 #
-# Default is a native arm64 container build (an Apple Silicon Mac and an Ampere
-# instance share an architecture, so nothing is emulated). `--on-server` builds
-# on the instance instead, for when Docker is unavailable — it is slower and
-# leaves a Rust toolchain on the host.
+# The default target is **linux/amd64**, because the instance is an x86_64
+# `VM.Standard.E2.1.Micro` — the A1 Ampere shapes this script was originally
+# written for were refused with `Out of host capacity`. Pass `--platform` if
+# that ever changes; a binary built for the wrong architecture installs happily
+# and then fails to exec.
+#
+# On an Apple Silicon Mac an amd64 container build is emulated through qemu, so
+# it is slow and memory-hungry. `--on-server` builds on the instance instead:
+# natively correct by construction, and the path deploy.sh is usually driven
+# with. It leaves a Rust toolchain on the host.
 #
 # Cargo features pass through, which is how a non-SQLite backend gets built:
 #
@@ -26,16 +31,21 @@ host=""
 ssh_opts=()
 features=""
 no_default_features=0
+# The instance is x86_64. See the header before changing this.
+platform=linux/amd64
 
 usage() {
   cat >&2 <<'EOF'
 usage: build.sh [--on-server user@host] [--ssh-opt OPT]...
-                [--no-default-features] [--features LIST]
+                [--no-default-features] [--features LIST] [--platform PLATFORM]
 
   --on-server HOST        build on the instance over SSH instead of in a container
   --ssh-opt OPT           extra option passed to ssh/rsync (repeatable)
   --features LIST         cargo features, comma-separated
   --no-default-features   drop the default feature set (which is `sqlite`)
+  --platform PLATFORM     container build target, default linux/amd64
+                          (the instance is x86_64); ignored by --on-server,
+                          which builds natively on whatever the host is
 
 The storage backend is a compile-time choice, so a PostgreSQL deployment is:
 
@@ -52,6 +62,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-opt)             ssh_opts+=("${2:?--ssh-opt needs a value}"); shift 2 ;;
     --features)            features="${2:?--features needs a value}"; shift 2 ;;
     --no-default-features) no_default_features=1; shift ;;
+    --platform)            platform="${2:?--platform needs a value}"; shift 2 ;;
     -h|--help)             usage ;;
     *)                     echo "build.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -85,9 +96,20 @@ if [[ "$mode" == container ]]; then
     exit 1
   fi
 
-  echo "==> building for linux/arm64 in a container${cargo_flags[*]+ (${cargo_flags[*]})}"
+  # The wrong architecture is not a build failure — it produces a binary that
+  # installs and then dies with "cannot execute binary file", which is a long
+  # way from the cause. Only the two shapes Oracle actually offers are accepted.
+  case "$platform" in
+    linux/amd64|linux/arm64) ;;
+    *)
+      echo "build.sh: --platform '$platform' is not one of linux/amd64, linux/arm64." >&2
+      echo "          The instance is x86_64, so linux/amd64 is almost certainly right." >&2
+      exit 2 ;;
+  esac
+
+  echo "==> building for $platform in a container${cargo_flags[*]+ (${cargo_flags[*]})}"
   docker buildx build \
-    --platform linux/arm64 \
+    --platform "$platform" \
     --file deploy/oracle/Dockerfile.build \
     --target artifact \
     --build-arg "CARGO_FEATURES=${cargo_flags[*]-}" \

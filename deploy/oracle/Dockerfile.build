@@ -1,13 +1,17 @@
-# Build-only image: produces an aarch64 binary and nothing else.
+# Build-only image: produces one Linux binary and nothing else.
 #
-# Oracle's free tier is Ampere (aarch64) and an Apple Silicon Mac is also
-# aarch64, so `--platform linux/arm64` runs natively here — no emulation, and
-# no cross-linking toolchain to assemble. The final stage is `scratch` because
-# the only artefact wanted is the executable.
+# The architecture comes from the `--platform` build.sh passes, which defaults
+# to linux/amd64 because the instance is x86_64. Nothing here is
+# architecture-specific: the compile runs inside an image of the target
+# architecture rather than cross-linking, so on an Apple Silicon Mac an amd64
+# build is emulated and slow. The final stage is `scratch` because the only
+# artefact wanted is the executable.
 
 ARG RUST_IMAGE=rust:1-bookworm
 
-FROM --platform=$TARGETPLATFORM ${RUST_IMAGE} AS build
+# No `--platform=$TARGETPLATFORM` here: that is already the default, and stating
+# it earns a RedundantTargetPlatform warning on every build.
+FROM ${RUST_IMAGE} AS build
 
 # Cargo feature flags, already assembled by build.sh — e.g.
 # `--no-default-features --features postgres`. Empty means the defaults.
