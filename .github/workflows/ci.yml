@@ -188,6 +188,14 @@ jobs:
   audit:
     name: Dependency advisories
     runs-on: ubuntu-latest
+    # The action writes its findings as a check run, which it only attempts when
+    # it has something to report. A job with the default read-only token
+    # therefore passes for as long as the audit is clean and fails with
+    # "Resource not accessible by integration" on the first advisory — losing
+    # the advisory itself behind a permissions error.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
