@@ -9,6 +9,8 @@ their history is in the git log.
 
 ## Unreleased
 
+## [0.5.0] — 2026-07-31
+
 ### Added
 
 - **`bastion-migrate-store`**, which copies a SQLite database into an empty
@@ -115,6 +117,15 @@ their history is in the git log.
   `use bastion::security::TokenIssuer` is unaffected; a path naming `jwt`
   directly needs updating. `security::jwt` is now one implementation of the
   trait rather than its home.
+
+### Security
+
+- `event-listener` moves to 5.4.2, closing RUSTSEC-2026-0221. The advisory is an
+  unsoundness warning rather than a vulnerability: affected versions implement
+  `Send` and `Sync` unconditionally for `StackSlot`, so a `!Send` tag set
+  through `Event::with_tag` can cross a thread boundary and race in safe code.
+  It reaches Bastion only through `sqlx-core`, and nothing here constructs a
+  tagged event, so the bump closes a warning rather than a reachable hole.
 
 ### Notes
 

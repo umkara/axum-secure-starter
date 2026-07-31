@@ -143,7 +143,7 @@ curl http://127.0.0.1:8443/health/ready
 ```
 
 ```json
-{ "status": "ready", "version": "0.4.0" }
+{ "status": "ready", "version": "0.5.0" }
 ```
 
 ---
