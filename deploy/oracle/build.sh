@@ -49,8 +49,9 @@ usage: build.sh [--on-server user@host] [--ssh-opt OPT]...
                           (the instance is x86_64); ignored by --on-server,
                           which builds natively on whatever the host is
   --jobs N                concurrent compiler jobs. The default is derived from
-                          the builder's RAM, roughly one job per 2 GiB, because
-                          a job per core is what exhausts a small builder
+                          the builder's RAM, roughly one job per 2 GiB and never
+                          fewer than 2, because a job per core is what exhausts
+                          a small builder
 
 The storage backend is a compile-time choice, so a PostgreSQL deployment is:
 
@@ -103,8 +104,16 @@ fi
 # in the guest failed; it was killed from outside.
 #
 # So budget by memory rather than cores: ~2 GiB per concurrent job, never more
-# jobs than cores, never fewer than one. On a builder with RAM to match its
-# cores this changes nothing.
+# jobs than cores. On a builder with RAM to match its cores this changes nothing.
+#
+# The floor is 2 rather than 1, which is worth justifying, because the arithmetic
+# alone would pick 1 on the very VM this was written for. Two things make that
+# safe now. The VM's memory is a hard ceiling — it cannot take the host down
+# again however many jobs run inside it — so what this figure now protects
+# against is a *guest* OOM, which kills one rustc with a legible error rather
+# than the machine. And two jobs is the only concurrency this crate has ever
+# been built at successfully. One is slower and has never been shown to be
+# safer. The cap by core count still applies, so a single-core builder gets 1.
 pick_jobs() {
   local mem_bytes ncpu n
   mem_bytes="$(docker info --format '{{.MemTotal}}' 2>/dev/null || echo 0)"
@@ -113,7 +122,7 @@ pick_jobs() {
   [[ "$ncpu" =~ ^[1-9][0-9]*$ ]] || ncpu=1
 
   n=$(( mem_bytes / (2 * 1024 * 1024 * 1024) ))
-  (( n < 1 )) && n=1
+  (( n < 2 )) && n=2
   (( n > ncpu )) && n=$ncpu
   echo "$n"
 }
