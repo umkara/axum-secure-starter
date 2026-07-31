@@ -1,0 +1,36 @@
+# What `docker buildx build .` must not send.
+#
+# Without this the build context is the whole working tree — `target/` alone
+# reaches tens of gigabytes after a few local builds, and it is transferred
+# before the first layer runs. The container build became unusable long before
+# anyone noticed, because the transfer looks like a slow build rather than a
+# mistake.
+#
+# These mirror the excludes `build.sh` already applies to its rsync for the
+# `--on-server` path. Keep the two in step: a file that is unsafe or pointless
+# to send over SSH is unsafe or pointless to send to a builder.
+
+# Build outputs. The Dockerfile compiles from source inside the image.
+target/
+dist/
+
+# Runtime state, not inputs.
+data/
+*.db
+*.db-shm
+*.db-wal
+
+.git/
+
+# Secrets must not reach a build context — it is readable by anything that can
+# talk to the builder. `env.production` holds the live signing key; deploy.sh
+# installs it over its own connection and the compiler never wants it.
+.env
+.env.*
+!.env.example
+deploy/oracle/env.production
+
+# The Node examples are not part of the Rust build. `node_modules` is most of
+# the bytes and none of the compile.
+node_modules/
+.next/

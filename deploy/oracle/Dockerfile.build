@@ -9,6 +9,14 @@ ARG RUST_IMAGE=rust:1-bookworm
 
 FROM --platform=$TARGETPLATFORM ${RUST_IMAGE} AS build
 
+# Cargo feature flags, already assembled by build.sh — e.g.
+# `--no-default-features --features postgres`. Empty means the defaults.
+#
+# Unquoted where it is used, deliberately: it has to word-split into separate
+# arguments, and it comes from this repository's own build script rather than
+# from anything a caller controls.
+ARG CARGO_FEATURES=
+
 # aws-lc-rs (used by rustls, sqlx and jsonwebtoken here) compiles C and needs
 # both cmake and clang; the base image ships neither.
 RUN apt-get update \
@@ -18,18 +26,24 @@ RUN apt-get update \
 WORKDIR /src
 
 # Dependencies change far less often than the source, so build them against a
-# stub first and let the layer cache keep them.
+# stub first and let the layer cache keep them. The features have to match the
+# real build below, or this layer compiles a different dependency set and buys
+# nothing.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src \
+# Every target the manifest declares needs a file here, or cargo refuses to
+# parse it — `bastion-migrate-store` has `required-features`, but cargo resolves
+# target paths before it decides what to build.
+RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
  && echo '' > src/lib.rs \
- && cargo build --release --locked \
+ && echo 'fn main() {}' > src/bin/bastion-migrate-store.rs \
+ && cargo build --release --locked ${CARGO_FEATURES} \
  && rm -rf src
 
 COPY . .
 # The stub's fingerprint would otherwise be reused for the real crate.
-RUN touch src/main.rs src/lib.rs \
- && cargo build --release --locked
+RUN touch src/main.rs src/lib.rs src/bin/bastion-migrate-store.rs \
+ && cargo build --release --locked ${CARGO_FEATURES}
 
 # Debian bookworm carries glibc 2.36; Ubuntu 24.04 carries 2.39. Building
 # against the older one keeps the binary loadable on the newer host.

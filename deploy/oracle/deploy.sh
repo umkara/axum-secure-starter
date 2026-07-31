@@ -35,19 +35,35 @@ usage: deploy.sh --host user@host [options]
   --skip-build    reuse the existing dist/bastion
   --on-server     build on the instance instead of in a container
   --ssh-opt OPT   extra option passed to ssh/scp/rsync (repeatable)
+
+  --features LIST         cargo features for the build, comma-separated
+  --no-default-features   drop the default feature set (which is `sqlite`)
+
+The storage backend is a compile-time choice, so deploying a PostgreSQL build
+means passing it through to the compiler:
+
+  deploy.sh --host ubuntu@1.2.3.4 --no-default-features --features postgres
+
+Both are ignored with --skip-build, which reuses whatever dist/bastion already
+is.
 EOF
   exit 2
 }
 
-build_args=()
+on_server=""
+feature_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)       host="${2:?}"; shift 2 ;;
     --env)        env_file="${2:?}"; shift 2 ;;
     --domain)     domain="${2:?}"; shift 2 ;;
     --skip-build) skip_build=1; shift ;;
-    --on-server)  build_args+=(--on-server); shift ;;
+    --on-server)  on_server=1; shift ;;
     --ssh-opt)    ssh_opts+=("${2:?}"); shift 2 ;;
+    # Not validated here: build.sh owns the rules, and duplicating them would
+    # mean two places to update when a backend is added.
+    --features)   feature_args+=(--features "${2:?}"); shift 2 ;;
+    --no-default-features) feature_args+=(--no-default-features); shift ;;
     -h|--help)    usage ;;
     *) echo "deploy.sh: unknown argument '$1'" >&2; usage ;;
   esac
@@ -62,13 +78,17 @@ if [[ -n "$env_file" && ! -f "$env_file" ]]; then
 fi
 
 if [[ -z "$skip_build" ]]; then
-  # --on-server needs the host, which build.sh takes as the flag's argument.
-  if [[ ${#build_args[@]} -gt 0 ]]; then
-    build_args+=("$host")
+  build_args=()
+  # --on-server takes the host as the flag's own argument. This used to be
+  # inferred from build_args being non-empty, which stopped being true the
+  # moment anything else could put a flag in there.
+  if [[ -n "$on_server" ]]; then
+    build_args+=(--on-server "$host")
   fi
   for opt in "${ssh_args[@]+"${ssh_args[@]}"}"; do
     build_args+=(--ssh-opt "$opt")
   done
+  build_args+=("${feature_args[@]+"${feature_args[@]}"}")
   deploy/oracle/build.sh "${build_args[@]+"${build_args[@]}"}"
 fi
 
