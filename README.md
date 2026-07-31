@@ -1,5 +1,10 @@
 # Bastion
 
+[![CI](https://github.com/umkara/bastion/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/umkara/bastion/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Docs](https://img.shields.io/badge/docs-bastionrs.dev-4c1)](https://bastionrs.dev)
+
 A JSON API server in Rust, built to be secure by default rather than secure by
 reminder. Registration, login, session rotation, and a small CRUD resource, with
 the protections you would otherwise bolt on afterwards already wired in and
